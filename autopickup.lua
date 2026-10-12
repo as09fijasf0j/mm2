@@ -1,6 +1,4 @@
--- Auto Pickup Gun Script for MM2 (Teleport Version - NO DISTANCE LIMIT)
--- Mobile Friendly with Movable GUI
--- Teleports to any gun on the map, picks it up, then teleports back
+-- lol
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -59,7 +57,7 @@ local function hasGun()
     return false
 end
 
--- Find nearest dropped gun (NO distance limit)
+-- Find nearest dropped gun (NO distance limit, searches ALL depths)
 local function findNearestGun()
     local character = LocalPlayer.Character
     if not character then return nil end
@@ -68,9 +66,10 @@ local function findNearestGun()
     if not rootPart then return nil end
 
     local nearestGun = nil
-    local shortestDistance = math.huge  -- No limit
+    local shortestDistance = math.huge
 
-    for _, obj in pairs(workspace:GetChildren()) do
+    -- GetDescendants finds guns at ANY depth in workspace
+    for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Tool") then
             local handle = obj:FindFirstChild("Handle")
             if handle then
@@ -93,11 +92,16 @@ local function pickupGun(gun)
     local handle = gun:FindFirstChild("Handle")
     if not handle then return end
 
-    -- Method 1: ProximityPrompt
+    -- Method 1: ProximityPrompt (fire both events for maximum compatibility)
     local prompt = gun:FindFirstChildOfClass("ProximityPrompt")
     if prompt then
         pcall(function()
             fireproximityprompt(prompt)
+        end)
+        pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(prompt.HoldDuration or 0)
+            prompt:InputHoldEnd()
         end)
         return
     end
