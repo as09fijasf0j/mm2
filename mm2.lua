@@ -1,6 +1,6 @@
 -- MM2 Auto Pickup + Role Tracker + Player Dropdown (Custom GUI)
 -- Mobile Friendly with Clean Draggable GUI
--- Sheriff mode: skip gun pickup, teleport to target, reset by them
+-- Sheriff mode + proper dead-state handling
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -12,6 +12,7 @@ local LocalPlayer = Players.LocalPlayer
 local TELEPORT_OFFSET = 3
 local RETURN_DELAY = 0.25
 local RESET_DELAY = 3
+local POST_RESET_COOLDOWN = 4  -- seconds to wait after a reset before allowing another chain
 local LOBBY_LOCK_ENABLED = false
 local AUTO_PICKUP_ENABLED = false
 
@@ -20,7 +21,9 @@ local SelectedTarget = nil
 
 -- Saved state
 local chainRunning = false
+local chainCooldownUntil = 0
 local roleTrackerConn = nil
+local charConn = nil
 
 --============================================================
 -- GUI
@@ -377,12 +380,35 @@ end)
 -- CORE HELPERS
 --============================================================
 
+-- Dead OR respawning returns false
 local function isAlive()
     local char = LocalPlayer.Character
     if not char then return false end
+    if not char.Parent then return false end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return false end
     return hum.Health > 0
+end
+
+-- Strict check: alive AND has root AND has humanoid with full parenting
+local function canAct()
+    if not isAlive() then return false end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    if hum.Parent ~= char then return false end
+    return true
+end
+
+-- Chain cooldown check
+local function isOnCooldown()
+    return tick() < chainCooldownUntil
+end
+
+local function startCooldown()
+    chainCooldownUntil = tick() + POST_RESET_COOLDOWN
 end
 
 local function getRoot()
@@ -410,6 +436,7 @@ local function getLobbyCFrame()
 end
 
 local function isInLobby()
+    if not canAct() then return true end
     local root = getRoot()
     if not root then return true end
     if not workspace:FindFirstChild("RegularLobby") then return true end
@@ -419,6 +446,7 @@ local function isInLobby()
 end
 
 local function findNearestGun()
+    if not canAct() then return nil end
     local root = getRoot()
     if not root then return nil end
     local nearest, shortest = nil, math.huge
@@ -438,7 +466,6 @@ local function getSelectedTargetRoot()
     return char:FindFirstChild("HumanoidRootPart")
 end
 
--- Check if LocalPlayer currently holds the Sheriff's Gun
 local function isLocalPlayerSheriff()
     local char = LocalPlayer.Character
     local backpack = LocalPlayer:FindFirstChild("Backpack")
@@ -484,29 +511,38 @@ end
 --============================================================
 
 local function teleportToLobby()
+    if not canAct() then return end
     local root = getRoot()
     if not root then return end
     local cf = getLobbyCFrame()
     if cf then pcall(function() root.CFrame = cf end) end
 end
 
--- Sheriff mode: teleport to target, wait 3s, reset by them
+local function doReset()
+    if not canAct() then return end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        pcall(function() hum.Health = 0 end)
+    end
+end
+
 local function runSheriffChain()
     if chainRunning then return end
-    if not isAlive() then return end
+    if isOnCooldown() then return end
+    if not canAct() then return end
 
     chainRunning = true
     setStatus("Sheriff mode: teleporting to target...")
 
-    local root = getRoot()
     local targetHRP = getSelectedTargetRoot()
-
     if not targetHRP then
         setStatus("No target selected")
         chainRunning = false
         return
     end
 
+    local root = getRoot()
     if root then
         pcall(function()
             root.CFrame = targetHRP.CFrame + Vector3.new(0, 3, 0)
@@ -515,7 +551,8 @@ local function runSheriffChain()
 
     task.wait(RETURN_DELAY)
 
-    if not isAlive() then
+    -- Check alive before reset
+    if not canAct() then
         chainRunning = false
         return
     end
@@ -523,19 +560,18 @@ local function runSheriffChain()
     setStatus("Resetting by target in " .. RESET_DELAY .. "s...")
     task.wait(RESET_DELAY)
 
-    if isAlive() then
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then pcall(function() hum.Health = 0 end) end
+    if canAct() then
+        startCooldown()
+        doReset()
     end
 
     chainRunning = false
 end
 
--- Normal mode: gun pickup chain
 local function runChain(gunPart)
     if chainRunning then return end
-    if not isAlive() then return end
+    if isOnCooldown() then return end
+    if not canAct() then return end
 
     chainRunning = true
 
@@ -544,16 +580,18 @@ local function runChain(gunPart)
 
     setStatus("Chain: teleporting to gun...")
 
-    if gunPart and gunPart.Parent then
+    if gunPart and gunPart.Parent and canAct() then
         pcall(function()
             root.CFrame = CFrame.new(gunPart.Position + Vector3.new(0, TELEPORT_OFFSET, 0))
         end)
         task.wait(RETURN_DELAY)
-        pickupGun(gunPart)
+        if canAct() then
+            pickupGun(gunPart)
+        end
         task.wait(RETURN_DELAY)
     end
 
-    if not isAlive() then
+    if not canAct() then
         chainRunning = false
         return
     end
@@ -561,13 +599,13 @@ local function runChain(gunPart)
     teleportToLobby()
     task.wait(RETURN_DELAY)
 
-    if not isAlive() then
+    if not canAct() then
         chainRunning = false
         return
     end
 
     local targetHRP = getSelectedTargetRoot()
-    if targetHRP then
+    if targetHRP and canAct() then
         setStatus("Chain: teleporting to target...")
         pcall(function()
             root.CFrame = targetHRP.CFrame + Vector3.new(0, 3, 0)
@@ -575,7 +613,7 @@ local function runChain(gunPart)
         task.wait(RETURN_DELAY)
     end
 
-    if not isAlive() then
+    if not canAct() then
         chainRunning = false
         return
     end
@@ -583,10 +621,9 @@ local function runChain(gunPart)
     setStatus("Chain: resetting in " .. RESET_DELAY .. "s...")
     task.wait(RESET_DELAY)
 
-    if isAlive() then
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then pcall(function() hum.Health = 0 end) end
+    if canAct() then
+        startCooldown()
+        doReset()
     end
 
     chainRunning = false
@@ -604,7 +641,8 @@ local function startLobbyLock()
     lobbyConn = RunService.Heartbeat:Connect(function()
         if not LOBBY_LOCK_ENABLED then return end
         if chainRunning then return end
-        if not isAlive() then return end
+        if isOnCooldown() then return end
+        if not canAct() then return end
         if not isInLobby() then teleportToLobby() end
     end)
 end
@@ -618,18 +656,16 @@ local function startAutoPickup()
     pickupConn = RunService.Heartbeat:Connect(function()
         if not AUTO_PICKUP_ENABLED then return end
         if chainRunning then return end
-        if not isAlive() then return end
+        if isOnCooldown() then return end
+        if not canAct() then return end
 
-        -- NEW: If we're the Sheriff, run the sheriff chain instead of gun pickup
         if isLocalPlayerSheriff() then
-            -- Only run if a target is selected
             if SelectedTarget then
                 task.spawn(function() runSheriffChain() end)
             end
             return
         end
 
-        -- Normal mode: find and pick up dropped gun
         local gun = findNearestGun()
         if gun then
             task.spawn(function() runChain(gun) end)
@@ -729,6 +765,10 @@ TeleportButton.MouseButton1Click:Connect(function()
         setStatus(SelectedTarget.Name .. " has no character")
         return
     end
+    if not canAct() then
+        setStatus("You are dead")
+        return
+    end
     local root = getRoot()
     if not root then
         setStatus("You have no character")
@@ -741,16 +781,13 @@ TeleportButton.MouseButton1Click:Connect(function()
 end)
 
 ResetButton.MouseButton1Click:Connect(function()
-    if not isAlive() then
+    if not canAct() then
         setStatus("You are already dead")
         return
     end
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        pcall(function() hum.Health = 0 end)
-        setStatus("Resetting...")
-    end
+    doReset()
+    startCooldown()
+    setStatus("Resetting...")
 end)
 
 Players.PlayerAdded:Connect(function()
@@ -765,13 +802,21 @@ Players.PlayerRemoving:Connect(function(plr)
     if PlayerListFrame.Visible then refreshPlayerList() end
 end)
 
-startRoleTracker()
+--============================================================
+-- CHARACTER RESPAWN HANDLING
+--============================================================
 
 LocalPlayer.CharacterAdded:Connect(function()
+    -- Reset chain state on respawn
+    chainRunning = false
+
+    -- If we reset, wait the full cooldown before re-engaging
     if LOBBY_LOCK_ENABLED then
         task.wait(1)
-        teleportToLobby()
+        if canAct() then teleportToLobby() end
     end
 end)
 
-print("MM2 Auto Pickup + Role Tracker + Sheriff Mode Loaded!")
+startRoleTracker()
+
+print("MM2 Auto Pickup + Sheriff Mode + Cooldown Loaded!")
