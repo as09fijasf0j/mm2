@@ -1,4 +1,4 @@
--- Custom Auto Pickup Gun Script for MM2 (Lobby Lock + Fling)
+-- Custom Auto Pickup Gun Script for MM2 (Teleport Chain + Fling + Role Tracker)
 -- Mobile Friendly with Clean Draggable GUI
 
 local Players = game:GetService("Players")
@@ -19,8 +19,8 @@ local FLING_DURATION = 2
 local FLING_SPIN_SPEED = 100
 
 -- Saved state
-local savedFallenPartsHeight = nil
 local chainRunning = false
+local roleTrackerConn = nil
 
 --============================================================
 -- GUI CREATION
@@ -33,10 +33,11 @@ ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
+-- MAIN PANEL (Left side)
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
 MainFrame.Size = UDim2.new(0, 240, 0, 290)
-MainFrame.Position = UDim2.new(0.5, -120, 0.1, 0)
+MainFrame.Position = UDim2.new(0, 10, 0.1, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -243,6 +244,62 @@ local function setStatus(msg)
 end
 
 --============================================================
+-- ROLE TRACKER GUI (Top Right)
+--============================================================
+
+local RoleFrame = Instance.new("Frame")
+RoleFrame.Name = "RoleFrame"
+RoleFrame.Size = UDim2.new(0, 200, 0, 80)
+RoleFrame.Position = UDim2.new(1, -210, 0, 10)
+RoleFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+RoleFrame.BorderSizePixel = 0
+RoleFrame.Active = true
+RoleFrame.Parent = ScreenGui
+
+local RoleCorner = Instance.new("UICorner")
+RoleCorner.CornerRadius = UDim.new(0, 10)
+RoleCorner.Parent = RoleFrame
+
+local RoleStroke = Instance.new("UIStroke")
+RoleStroke.Color = Color3.fromRGB(70, 70, 85)
+RoleStroke.Thickness = 1
+RoleStroke.Parent = RoleFrame
+
+local RoleTitle = Instance.new("TextLabel")
+RoleTitle.Size = UDim2.new(1, 0, 0, 24)
+RoleTitle.Position = UDim2.new(0, 0, 0, 0)
+RoleTitle.BackgroundTransparency = 1
+RoleTitle.Text = "ROLES"
+RoleTitle.TextColor3 = Color3.fromRGB(230, 230, 240)
+RoleTitle.TextSize = 12
+RoleTitle.Font = Enum.Font.GothamBold
+RoleTitle.Parent = RoleFrame
+
+local MurdererLabel = Instance.new("TextLabel")
+MurdererLabel.Name = "MurdererLabel"
+MurdererLabel.Size = UDim2.new(1, -20, 0, 22)
+MurdererLabel.Position = UDim2.new(0, 10, 0, 28)
+MurdererLabel.BackgroundTransparency = 1
+MurdererLabel.Text = "Murderer: Scanning..."
+MurdererLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+MurdererLabel.TextSize = 11
+MurdererLabel.Font = Enum.Font.Gotham
+MurdererLabel.TextXAlignment = Enum.TextXAlignment.Left
+MurdererLabel.Parent = RoleFrame
+
+local SheriffLabel = Instance.new("TextLabel")
+SheriffLabel.Name = "SheriffLabel"
+SheriffLabel.Size = UDim2.new(1, -20, 0, 22)
+SheriffLabel.Position = UDim2.new(0, 10, 0, 50)
+SheriffLabel.BackgroundTransparency = 1
+SheriffLabel.Text = "Sheriff: Scanning..."
+SheriffLabel.TextColor3 = Color3.fromRGB(100, 150, 255)
+SheriffLabel.TextSize = 11
+SheriffLabel.Font = Enum.Font.Gotham
+SheriffLabel.TextXAlignment = Enum.TextXAlignment.Left
+SheriffLabel.Parent = RoleFrame
+
+--============================================================
 -- DRAG SUPPORT
 --============================================================
 
@@ -307,7 +364,6 @@ local function getLobbyCFrame()
             return mainLobby.PrimaryPart.CFrame + Vector3.new(0, 5, 0)
         end
     end
-    -- Fallback: any SpawnLocation
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("SpawnLocation") then
             return obj.CFrame + Vector3.new(0, 5, 0)
@@ -316,7 +372,6 @@ local function getLobbyCFrame()
     return nil
 end
 
--- Check if a CFrame is inside the lobby region
 local function isInLobby()
     local root = getRoot()
     if not root then return true end
@@ -411,7 +466,6 @@ local function runChain(gunPart)
 
     setStatus("Chain: teleporting to gun...")
 
-    -- 1. Go to gun
     if gunPart and gunPart.Parent then
         pcall(function()
             root.CFrame = CFrame.new(gunPart.Position + Vector3.new(0, TELEPORT_OFFSET, 0))
@@ -421,11 +475,9 @@ local function runChain(gunPart)
         task.wait(RETURN_DELAY)
     end
 
-    -- 2. Back to lobby
     teleportToLobby()
     task.wait(RETURN_DELAY)
 
-    -- 3. Teleport to target player
     local targetHRP = findTargetPlayer()
     if targetHRP then
         setStatus("Chain: teleporting to target...")
@@ -435,7 +487,6 @@ local function runChain(gunPart)
         task.wait(RETURN_DELAY)
     end
 
-    -- 4. Wait 3 seconds and reset
     setStatus("Chain: resetting in " .. RESET_DELAY .. "s...")
     task.wait(RESET_DELAY)
 
@@ -501,42 +552,68 @@ local function stopAutoPickup()
 end
 
 --============================================================
--- ROLE DETECTION
+-- ROLE TRACKING
+--============================================================
+
+local function checkPlayerForRole(plr, roleName)
+    local char = plr.Character
+    local function checkContainer(container)
+        if not container then return false end
+        for _, tool in ipairs(container:GetChildren()) do
+            if tool:IsA("Tool") then
+                local n = tool.Name:lower()
+                if roleName == "murderer" and n:find("knife") then return true end
+                if roleName == "sheriff" and n:find("gun") and not n:find("drop") then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+    if checkContainer(char) then return true end
+    return checkContainer(plr:FindFirstChildOfClass("Backpack"))
+end
+
+local function updateRoleTracker()
+    local murdererName = "None"
+    local sheriffName = "None"
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            if checkPlayerForRole(plr, "murderer") then
+                murdererName = plr.Name
+            elseif checkPlayerForRole(plr, "sheriff") then
+                sheriffName = plr.Name
+            end
+        end
+    end
+    MurdererLabel.Text = "Murderer: " .. murdererName
+    SheriffLabel.Text = "Sheriff: " .. sheriffName
+end
+
+local function startRoleTracker()
+    if roleTrackerConn then return end
+    roleTrackerConn = RunService.Heartbeat:Connect(function()
+        pcall(updateRoleTracker)
+    end)
+end
+
+--============================================================
+-- ROLE DETECTION (For Fling Buttons)
 --============================================================
 
 local function findRolePlayer(roleName)
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
+        if plr ~= LocalPlayer and checkPlayerForRole(plr, roleName) then
             local char = plr.Character
-            local function checkContainer(container)
-                if not container then return false end
-                for _, tool in ipairs(container:GetChildren()) do
-                    if tool:IsA("Tool") then
-                        local n = tool.Name:lower()
-                        if roleName == "murderer" and n:find("knife") then return true end
-                        if roleName == "sheriff" and n:find("gun") and not n:find("drop") then
-                            return true
-                        end
-                    end
-                end
-                return false
-            end
-            local found = false
-            if char then found = checkContainer(char) end
-            if not found then
-                found = checkContainer(plr:FindFirstChildOfClass("Backpack"))
-            end
-            if found then
-                local h = char and char:FindFirstChild("HumanoidRootPart")
-                if h then return plr, h end
-            end
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then return plr, hrp end
         end
     end
     return nil, nil
 end
 
 --============================================================
--- FLING (Using reference script's technique)
+-- FLING (Using BodyVelocity/BodyGyro - more reliable method)
 --============================================================
 
 local function flingTarget(targetHRP)
@@ -546,14 +623,6 @@ local function flingTarget(targetHRP)
     local char = targetHRP.Parent
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
-
-    -- KEY FIX: Disable FallenPartsDestroyHeight so server doesn't reset flung player
-    if savedFallenPartsHeight == nil then
-        savedFallenPartsHeight = workspace.FallenPartsDestroyHeight
-    end
-    pcall(function()
-        workspace.FallenPartsDestroyHeight = 0/0
-    end)
 
     -- Try to grab network ownership
     pcall(function()
@@ -571,6 +640,22 @@ local function flingTarget(targetHRP)
         targetHRP.RotVelocity = Vector3.new(0, 0, 0)
     end)
 
+    -- Create fling forces
+    local bv = Instance.new("BodyVelocity")
+    bv.Name = "FlingVelocity"
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Velocity = Vector3.new(0, 0, 0)
+    bv.P = math.huge
+    bv.Parent = targetHRP
+
+    local bg = Instance.new("BodyGyro")
+    bg.Name = "FlingAngular"
+    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bg.P = math.huge
+    bg.D = 50
+    bg.CFrame = targetHRP.CFrame
+    bg.Parent = targetHRP
+
     -- Main fling loop
     local startTime = tick()
     local angle = 0
@@ -581,47 +666,26 @@ local function flingTarget(targetHRP)
         angle = angle + FLING_SPIN_SPEED
         local spin = CFrame.Angles(math.rad(angle), 0, 0)
 
-        -- Alternating position fling using SetPrimaryPartCFrame
         pcall(function()
-            char:SetPrimaryPartCFrame(CFrame.new(targetHRP.Position + Vector3.new(0, 1.5, 0)) * spin)
-        end)
-        task.wait()
-
-        pcall(function()
-            char:SetPrimaryPartCFrame(CFrame.new(targetHRP.Position + Vector3.new(0, -1.5, 0)) * spin)
-        end)
-        task.wait()
-
-        pcall(function()
-            char:SetPrimaryPartCFrame(CFrame.new(targetHRP.Position + Vector3.new(0, 1.5, 0)) * spin)
-            targetHRP.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
-            targetHRP.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
-        end)
-        task.wait()
-
-        pcall(function()
-            char:SetPrimaryPartCFrame(CFrame.new(targetHRP.Position + Vector3.new(0, -1.5, 0)) * spin)
+            bg.CFrame = targetHRP.CFrame * spin
+            bv.Velocity = Vector3.new(
+                (math.random() - 0.5) * 2000,
+                math.random() * 1000,
+                (math.random() - 0.5) * 2000
+            )
         end)
         task.wait()
     end
 
-    -- Force getting up state (helps un-ragdoll)
+    -- Clean up
     pcall(function()
-        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+        if bv and bv.Parent then bv:Destroy() end
+        if bg and bg.Parent then bg:Destroy() end
     end)
 
     -- Re-enable seated
     pcall(function()
         hum:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
-    end)
-
-    -- Restore FallenPartsDestroyHeight
-    task.delay(2, function()
-        if savedFallenPartsHeight ~= nil then
-            pcall(function()
-                workspace.FallenPartsDestroyHeight = savedFallenPartsHeight
-            end)
-        end
     end)
 end
 
@@ -679,6 +743,9 @@ FlingSheriffButton.MouseButton1Click:Connect(function()
     end
 end)
 
+-- Start role tracker on load
+startRoleTracker()
+
 LocalPlayer.CharacterAdded:Connect(function()
     if LOBBY_LOCK_ENABLED then
         task.wait(1)
@@ -686,4 +753,4 @@ LocalPlayer.CharacterAdded:Connect(function()
     end
 end)
 
-print("MM2 Auto Pickup + Fling + Lobby Lock Loaded!")
+print("MM2 Auto Pickup + Fling + Role Tracker Loaded!")
