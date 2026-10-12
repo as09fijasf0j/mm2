@@ -1,6 +1,7 @@
--- Custom Auto Pickup Gun Script for MM2 (Teleport Chain + Fling Buttons)
+-- Custom Auto Pickup Gun Script for MM2 (Teleport Chain + CFrame Fling)
 -- Mobile Friendly with Clean Draggable GUI
 -- Role detection via Character AND Backpack scanning
+-- Fling uses direct CFrame manipulation (bypasses NetworkOwnership)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -15,6 +16,8 @@ local RESET_DELAY = 3
 local AUTO_PICKUP_ENABLED = false
 local TARGET_PLAYER_NAME = ""
 local FLING_ENABLED = true
+local FLING_DURATION = 2       -- How long to fling (seconds)
+local FLING_SPIN_SPEED = 100   -- How fast to spin during fling
 
 --============================================================
 -- GUI CREATION
@@ -45,7 +48,7 @@ MainStroke.Color = Color3.fromRGB(70, 70, 85)
 MainStroke.Thickness = 1.5
 MainStroke.Parent = MainFrame
 
--- Top bar (drag handle)
+-- Top bar
 local TopBar = Instance.new("Frame")
 TopBar.Name = "TopBar"
 TopBar.Size = UDim2.new(1, 0, 0, 34)
@@ -440,7 +443,6 @@ local function findRolePlayer(roleName)
                 return false
             end
 
-            -- Check equipped tools AND Backpack
             local found = false
             if char then
                 found = checkContainer(char)
@@ -460,61 +462,81 @@ local function findRolePlayer(roleName)
 end
 
 --============================================================
--- FLING LOGIC
+-- FLING LOGIC (CFrame-based, bypasses NetworkOwnership)
 --============================================================
 
 local function flingTarget(targetHRP)
     if not targetHRP or not targetHRP.Parent then return end
     if not FLING_ENABLED then return end
 
-    for _, obj in ipairs(targetHRP:GetChildren()) do
-        if obj.Name == "FlingVelocity" or obj.Name == "FlingAngular" then
-            pcall(function() obj:Destroy() end)
-        end
-    end
+    -- Get the character model and humanoid
+    local character = targetHRP.Parent
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
 
-    local bv = Instance.new("BodyVelocity")
-    bv.Name = "FlingVelocity"
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Velocity = Vector3.new(0, 0, 0)
-    bv.P = math.huge
-    bv.Parent = targetHRP
-
-    local bg = Instance.new("BodyGyro")
-    bg.Name = "FlingAngular"
-    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    bg.P = math.huge
-    bg.D = 50
-    bg.CFrame = targetHRP.CFrame
-    bg.Parent = targetHRP
-
-    local startTime = tick()
-    local spinConnection
-    spinConnection = RunService.Heartbeat:Connect(function()
-        if not targetHRP or not targetHRP.Parent then
-            spinConnection:Disconnect()
-            return
-        end
-        if tick() - startTime > 1 then
-            spinConnection:Disconnect()
-            if bv then pcall(function() bv:Destroy() end) end
-            if bg then pcall(function() bg:Destroy() end) end
-            return
-        end
-        local spin = CFrame.Angles(math.random() * math.pi, math.random() * math.pi * 2, math.random() * math.pi)
-        pcall(function()
-            bg.CFrame = targetHRP.CFrame * spin
-            bv.Velocity = Vector3.new(
-                (math.random() - 0.5) * 2000,
-                math.random() * 1000,
-                (math.random() - 0.5) * 2000
-            )
-        end)
+    -- Try to grab network ownership (works sometimes, ignored if it fails)
+    pcall(function()
+        targetHRP:SetNetworkOwner(LocalPlayer)
     end)
 
-    task.delay(1.5, function()
-        if bv and bv.Parent then pcall(function() bv:Destroy() end) end
-        if bg and bg.Parent then pcall(function() bg:Destroy() end) end
+    -- Disable seated state so the character doesn't anchor
+    pcall(function()
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+    end)
+
+    -- Zero out velocity to start clean
+    pcall(function()
+        targetHRP.Velocity = Vector3.new(0, 0, 0)
+        targetHRP.RotVelocity = Vector3.new(0, 0, 0)
+    end)
+
+    -- Main fling loop: rapidly alternate CFrame positions
+    local startTime = tick()
+    local angle = 0
+
+    while tick() - startTime < FLING_DURATION do
+        if not targetHRP or not targetHRP.Parent then break end
+
+        angle = angle + FLING_SPIN_SPEED
+        local spinCFrame = CFrame.Angles(math.rad(angle), 0, 0)
+
+        -- Position 1: above + spin
+        pcall(function()
+            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 1.5, 0) * spinCFrame
+        end)
+        task.wait()
+
+        -- Position 2: below + spin
+        pcall(function()
+            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, -1.5, 0) * spinCFrame
+        end)
+        task.wait()
+
+        -- Position 3: above + massive velocity
+        pcall(function()
+            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 1.5, 0) * spinCFrame
+            targetHRP.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
+            targetHRP.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+        end)
+        task.wait()
+
+        -- Position 4: below again
+        pcall(function()
+            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, -1.5, 0) * spinCFrame
+        end)
+        task.wait()
+    end
+
+    -- Re-enable seated state
+    pcall(function()
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+    end)
+
+    -- Clean up velocities
+    pcall(function()
+        targetHRP.Velocity = Vector3.new(0, 0, 0)
+        targetHRP.RotVelocity = Vector3.new(0, 0, 0)
     end)
 end
 
@@ -559,7 +581,9 @@ FlingMurdererButton.MouseButton1Click:Connect(function()
     local plr, hrp = findRolePlayer("murderer")
     if plr and hrp then
         setStatus("Flinging murderer: " .. plr.Name)
-        flingTarget(hrp)
+        task.spawn(function()
+            flingTarget(hrp)
+        end)
     else
         setStatus("Murderer not found in any inventory")
     end
@@ -569,7 +593,9 @@ FlingSheriffButton.MouseButton1Click:Connect(function()
     local plr, hrp = findRolePlayer("sheriff")
     if plr and hrp then
         setStatus("Flinging sheriff: " .. plr.Name)
-        flingTarget(hrp)
+        task.spawn(function()
+            flingTarget(hrp)
+        end)
     else
         setStatus("Sheriff not found in any inventory")
     end
@@ -581,5 +607,6 @@ LocalPlayer.CharacterAdded:Connect(function()
     end
 end)
 
-print("MM2 Auto Pickup + Fling Loaded!")
+print("MM2 Auto Pickup + CFrame Fling Loaded!")
 print("Role detection: Character AND Backpack")
+print("Fling: CFrame-based (bypasses NetworkOwnership)")
