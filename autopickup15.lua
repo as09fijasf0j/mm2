@@ -16,6 +16,7 @@ local RESET_DELAY = 3
 local LOBBY_LOCK_ENABLED = false
 local AUTO_PICKUP_ENABLED = false
 local TARGET_PLAYER_NAME = ""
+local TARGET_PLAYER_OBJ = nil
 local FLING_TIMEOUT = 2.5
 
 -- Saved state
@@ -37,8 +38,8 @@ ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 240, 0, 290)
-MainFrame.Position = UDim2.new(0, 10, 0.1, 0)
+MainFrame.Size = UDim2.new(0, 240, 0, 340)
+MainFrame.Position = UDim2.new(0, 10, 0.05, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -182,10 +183,28 @@ FlingLabel.Font = Enum.Font.GothamBold
 FlingLabel.TextXAlignment = Enum.TextXAlignment.Left
 FlingLabel.Parent = MainFrame
 
+-- SELECT PLAYER dropdown button
+local SelectButton = Instance.new("TextButton")
+SelectButton.Name = "SelectButton"
+SelectButton.Size = UDim2.new(1, -24, 0, 30)
+SelectButton.Position = UDim2.new(0, 12, 0, 218)
+SelectButton.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+SelectButton.BorderSizePixel = 0
+SelectButton.Text = "SELECT PLAYER..."
+SelectButton.TextColor3 = Color3.fromRGB(220, 220, 240)
+SelectButton.TextSize = 12
+SelectButton.Font = Enum.Font.Gotham
+SelectButton.AutoButtonColor = false
+SelectButton.Parent = MainFrame
+
+local SelectCorner = Instance.new("UICorner")
+SelectCorner.CornerRadius = UDim.new(0, 8)
+SelectCorner.Parent = SelectButton
+
 local FlingMurdererButton = Instance.new("TextButton")
 FlingMurdererButton.Name = "FlingMurdererButton"
 FlingMurdererButton.Size = UDim2.new(0.5, -18, 0, 38)
-FlingMurdererButton.Position = UDim2.new(0, 12, 0, 218)
+FlingMurdererButton.Position = UDim2.new(0, 12, 0, 254)
 FlingMurdererButton.BackgroundColor3 = Color3.fromRGB(170, 50, 50)
 FlingMurdererButton.BorderSizePixel = 0
 FlingMurdererButton.Text = "FLING MURDERER"
@@ -202,7 +221,7 @@ FlingMCorner.Parent = FlingMurdererButton
 local FlingSheriffButton = Instance.new("TextButton")
 FlingSheriffButton.Name = "FlingSheriffButton"
 FlingSheriffButton.Size = UDim2.new(0.5, -18, 0, 38)
-FlingSheriffButton.Position = UDim2.new(0.5, 6, 0, 218)
+FlingSheriffButton.Position = UDim2.new(0.5, 6, 0, 254)
 FlingSheriffButton.BackgroundColor3 = Color3.fromRGB(50, 100, 200)
 FlingSheriffButton.BorderSizePixel = 0
 FlingSheriffButton.Text = "FLING SHERIFF"
@@ -219,7 +238,7 @@ FlingSCorner.Parent = FlingSheriffButton
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Name = "StatusLabel"
 StatusLabel.Size = UDim2.new(1, -24, 0, 16)
-StatusLabel.Position = UDim2.new(0, 12, 0, 264)
+StatusLabel.Position = UDim2.new(0, 12, 0, 314)
 StatusLabel.BackgroundTransparency = 1
 StatusLabel.Text = ""
 StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
@@ -228,12 +247,80 @@ StatusLabel.Font = Enum.Font.Gotham
 StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 StatusLabel.Parent = MainFrame
 
+-- Player list popup (initially hidden)
+local PlayerListFrame = Instance.new("ScrollingFrame")
+PlayerListFrame.Name = "PlayerListFrame"
+PlayerListFrame.Size = UDim2.new(1, -24, 0, 150)
+PlayerListFrame.Position = UDim2.new(0, 12, 0, 218)
+PlayerListFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+PlayerListFrame.BorderSizePixel = 0
+PlayerListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+PlayerListFrame.ScrollBarThickness = 3
+PlayerListFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 130)
+PlayerListFrame.Visible = false
+PlayerListFrame.ZIndex = 20
+PlayerListFrame.Parent = MainFrame
+
+local ListCorner = Instance.new("UICorner")
+ListCorner.CornerRadius = UDim.new(0, 8)
+ListCorner.Parent = PlayerListFrame
+
+local ListStroke = Instance.new("UIStroke")
+ListStroke.Color = Color3.fromRGB(100, 100, 130)
+ListStroke.Thickness = 1
+ListStroke.Parent = PlayerListFrame
+
+local ListLayout = Instance.new("UIListLayout")
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Padding = UDim.new(0, 3)
+ListLayout.Parent = PlayerListFrame
+
 local function setStatus(msg)
     StatusLabel.Text = msg
     task.delay(2.5, function()
         if StatusLabel.Text == msg then StatusLabel.Text = "" end
     end)
 end
+
+local function refreshPlayerList()
+    for _, child in ipairs(PlayerListFrame:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, -8, 0, 26)
+            btn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+            btn.BorderSizePixel = 0
+            btn.Text = "  " .. plr.Name
+            btn.TextColor3 = Color3.fromRGB(220, 220, 240)
+            btn.TextSize = 12
+            btn.Font = Enum.Font.Gotham
+            btn.TextXAlignment = Enum.TextXAlignment.Left
+            btn.AutoButtonColor = false
+            btn.Parent = PlayerListFrame
+
+            local bc = Instance.new("UICorner")
+            bc.CornerRadius = UDim.new(0, 6)
+            bc.Parent = btn
+
+            btn.MouseButton1Click:Connect(function()
+                TARGET_PLAYER_OBJ = plr
+                SelectButton.Text = "TARGET: " .. plr.Name
+                SelectButton.BackgroundColor3 = Color3.fromRGB(60, 100, 180)
+                PlayerListFrame.Visible = false
+                setStatus("Selected: " .. plr.Name)
+            end)
+        end
+    end
+    task.wait()
+    PlayerListFrame.CanvasSize = UDim2.new(0, 0, 0, ListLayout.AbsoluteContentSize.Y + 10)
+end
+
+SelectButton.MouseButton1Click:Connect(function()
+    refreshPlayerList()
+    PlayerListFrame.Visible = not PlayerListFrame.Visible
+end)
 
 --============================================================
 -- ROLE TRACKER
@@ -563,7 +650,7 @@ local function findRolePlayer(roleName)
 end
 
 --============================================================
--- FLING (From open source — proven working)
+-- FLING (Proven working — from open source)
 --============================================================
 
 local function SHubFling(TargetPlayer)
@@ -590,11 +677,13 @@ local function SHubFling(TargetPlayer)
 
     env.OldPos = Root.CFrame
 
-    -- Change camera subject to target (critical for position replication)
+    -- Camera swap (critical for position replication)
     repeat
         task.wait()
         Workspace.CurrentCamera.CameraSubject = THead or Handle or THumanoid
-    until Workspace.CurrentCamera.CameraSubject == THead or Workspace.CurrentCamera.CameraSubject == Handle or Workspace.CurrentCamera.CameraSubject == THumanoid
+    until Workspace.CurrentCamera.CameraSubject == THead
+       or Workspace.CurrentCamera.CameraSubject == Handle
+       or Workspace.CurrentCamera.CameraSubject == THumanoid
 
     local function FPos(BasePart, Pos, Ang)
         local targetCF = CFrame.new(BasePart.Position) * Pos * Ang
@@ -604,7 +693,6 @@ local function SHubFling(TargetPlayer)
         Root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
     end
 
-    -- Rapid oscillation between 4 offsets while spinning
     local start = tick()
     local angle = 0
     env.timeout = env.timeout or FLING_TIMEOUT
@@ -623,7 +711,6 @@ local function SHubFling(TargetPlayer)
         end
     until target.Velocity.Magnitude > 500 or tick() - start > env.timeout
 
-    -- BodyVelocity boost
     local BV = Instance.new("BodyVelocity")
     BV.Name = "FlingVel"
     BV.Velocity = Vector3.new(9e8, 9e8, 9e8)
@@ -638,13 +725,11 @@ local function SHubFling(TargetPlayer)
         Hum:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
     end)
 
-    -- Restore camera
     repeat
         task.wait()
         Workspace.CurrentCamera.CameraSubject = Hum
     until Workspace.CurrentCamera.CameraSubject == Hum
 
-    -- Restore position and clear velocity until we're back within 25 studs
     repeat
         local cf = env.OldPos * CFrame.new(0, .5, 0)
         Root.CFrame = cf
@@ -715,8 +800,13 @@ FlingMurdererButton.MouseButton1Click:Connect(function()
     if plr then
         setStatus("Flinging murderer: " .. plr.Name)
         startFling(plr)
+    elseif TARGET_PLAYER_OBJ and TARGET_PLAYER_OBJ.Character then
+        setStatus("Flinging selected: " .. TARGET_PLAYER_OBJ.Name)
+        startFling(TARGET_PLAYER_OBJ)
     else
-        setStatus("Murderer not found")
+        setStatus("Murderer not found - select a player")
+        refreshPlayerList()
+        PlayerListFrame.Visible = true
     end
 end)
 
@@ -725,9 +815,22 @@ FlingSheriffButton.MouseButton1Click:Connect(function()
     if plr then
         setStatus("Flinging sheriff: " .. plr.Name)
         startFling(plr)
+    elseif TARGET_PLAYER_OBJ and TARGET_PLAYER_OBJ.Character then
+        setStatus("Flinging selected: " .. TARGET_PLAYER_OBJ.Name)
+        startFling(TARGET_PLAYER_OBJ)
     else
-        setStatus("Sheriff not found")
+        setStatus("Sheriff not found - select a player")
+        refreshPlayerList()
+        PlayerListFrame.Visible = true
     end
+end)
+
+-- Auto-refresh the list when players join/leave
+Players.PlayerAdded:Connect(function()
+    if PlayerListFrame.Visible then refreshPlayerList() end
+end)
+Players.PlayerRemoving:Connect(function()
+    if PlayerListFrame.Visible then refreshPlayerList() end
 end)
 
 startRoleTracker()
@@ -740,4 +843,4 @@ LocalPlayer.CharacterAdded:Connect(function()
 end)
 
 print("MM2 Auto Pickup + Working Fling + Role Tracker Loaded!")
-print("Fling: Camera subject swap + 4-corner oscillation (proven working)")
+print("Fling: camera swap + 4-corner oscillation (from open source)")
