@@ -498,6 +498,7 @@ local function startAutoPickup()
     pickupConn = RunService.Heartbeat:Connect(function()
         if not AUTO_PICKUP_ENABLED then return end
         if chainRunning then return end
+        if flinging then return end
         local gun = findNearestGun()
         if gun then
             task.spawn(function() runChain(gun) end)
@@ -565,7 +566,7 @@ local function findRolePlayer(roleName)
 end
 
 --============================================================
--- ENGINE-LEVEL FLING (from reference — fling YOURSELF into target)
+-- ENGINE-LEVEL FLING (v2 — stronger + self-restore)
 --============================================================
 
 local function flingTarget(targetHRP)
@@ -581,13 +582,24 @@ local function flingTarget(targetHRP)
     flinging = true
     setStatus("Flinging...")
 
+    -- Save original position AND original part properties
     local savedCFrame = root.CFrame
+    local savedProps = {}
+    for _, v in ipairs(char:GetDescendants()) do
+        if v:IsA("BasePart") then
+            savedProps[v] = {
+                CanCollide = v.CanCollide,
+                Massless = v.Massless,
+                CustomPhysicalProperties = v.CustomPhysicalProperties
+            }
+        end
+    end
 
     -- Force our parts to be heavy and collidable so physics registers the collision
     for _, v in ipairs(char:GetDescendants()) do
         if v:IsA("BasePart") then
             pcall(function()
-                v.CustomPhysicalProperties = PhysicalProperties.new(100, 0.3, 0.5)
+                v.CustomPhysicalProperties = PhysicalProperties.new(200, 0.1, 0.8)
                 v.CanCollide = true
                 v.Massless = false
             end)
@@ -596,36 +608,77 @@ local function flingTarget(targetHRP)
 
     local connection
     local startTime = tick()
+    local flingDuration = 0.7
 
-    -- RunService.Stepped runs exactly before the physics engine updates
     connection = RunService.Stepped:Connect(function()
-        if targetHRP and targetHRP.Parent and root and root.Parent then
-            root.CanCollide = true
-            -- Teleport ourselves into the target with slight random offset
-            pcall(function()
-                root.CFrame = targetHRP.CFrame * CFrame.new(
-                    math.random(-1, 1), math.random(-1, 1), math.random(-1, 1)
-                )
-                root.AssemblyLinearVelocity = Vector3.new(
-                    math.random(-100000, 100000), 100000, math.random(-100000, 100000)
-                )
-                root.AssemblyAngularVelocity = Vector3.new(
-                    math.random(-100000, 100000), 100000, math.random(-100000, 100000)
-                )
-            end)
-        else
+        if not (targetHRP and targetHRP.Parent and root and root.Parent) then
             if connection then connection:Disconnect() end
+            return
         end
-        if tick() - startTime > 0.5 then
+
+        pcall(function()
+            root.CanCollide = true
+
+            root.CFrame = targetHRP.CFrame * CFrame.new(
+                math.random(-2, 2) / 10,
+                math.random(-2, 2) / 10,
+                math.random(-2, 2) / 10
+            )
+
+            root.AssemblyLinearVelocity = Vector3.new(
+                math.random(-500000, 500000),
+                500000,
+                math.random(-500000, 500000)
+            )
+            root.AssemblyAngularVelocity = Vector3.new(
+                math.random(-500000, 500000),
+                500000,
+                math.random(-500000, 500000)
+            )
+
+            for _, v in ipairs(targetHRP.Parent:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    pcall(function()
+                        v.CanCollide = true
+                        v.Massless = false
+                    end)
+                end
+            end
+        end)
+
+        if tick() - startTime > flingDuration then
             if connection then connection:Disconnect() end
         end
     end)
 
-    task.wait(0.55)
+    task.wait(flingDuration)
 
     if connection then connection:Disconnect() end
 
-    -- Snap back and reset physics
+    -- SNAP BACK IMMEDIATELY to your original spot
+    if root and root.Parent then
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            root.CFrame = savedCFrame
+        end)
+    end
+
+    -- Restore original part properties
+    for part, props in pairs(savedProps) do
+        if part and part.Parent then
+            pcall(function()
+                part.CanCollide = props.CanCollide
+                part.Massless = props.Massless
+                if props.CustomPhysicalProperties then
+                    part.CustomPhysicalProperties = props.CustomPhysicalProperties
+                end
+            end)
+        end
+    end
+
+    -- Re-snap after one more frame in case physics drifted
+    task.wait(0.05)
     if root and root.Parent then
         pcall(function()
             root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
