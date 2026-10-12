@@ -1,4 +1,4 @@
--- MM2 Auto Pickup + Role Tracker + Fling (Custom GUI)
+-- MM2 Auto Pickup + Role Tracker + Spinning Fling (Custom GUI)
 -- Mobile Friendly with Clean Draggable GUI
 
 local Players = game:GetService("Players")
@@ -560,7 +560,7 @@ local function findRolePlayer(roleName)
 end
 
 --============================================================
--- FLING (BodyThrust technique)
+-- FLING (BodyThrust + Torso Spin + Self-Restore)
 --============================================================
 
 local function stopFling()
@@ -578,10 +578,14 @@ local function aggressiveFling(target)
     local char = LocalPlayer.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
     if not hrp then return end
 
     flinging = true
     setStatus("Flinging...")
+
+    -- SAVE your original position
+    local savedCFrame = hrp.CFrame
 
     -- Create BodyThrust on our own HumanoidRootPart
     local thr = Instance.new("BodyThrust")
@@ -590,8 +594,18 @@ local function aggressiveFling(target)
     thr.Location = hrp.Position
     thr.Parent = hrp
 
+    -- BodyGyro to spin us wildly inside the target
+    local spin = Instance.new("BodyGyro")
+    spin.Name = "FlingSpin"
+    spin.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    spin.P = math.huge
+    spin.D = 0
+    spin.CFrame = hrp.CFrame
+    spin.Parent = hrp
+
     local conn
     local startTime = tick()
+    local angle = 0
 
     conn = RunService.Heartbeat:Connect(function()
         if not flinging then
@@ -600,29 +614,38 @@ local function aggressiveFling(target)
         end
 
         local targetChar = target.Character
-        if not targetChar then
-            if conn then conn:Disconnect() end
-            return
-        end
-
-        local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
+        local targetHRP = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
         if not targetHRP then
             if conn then conn:Disconnect() end
             return
         end
 
+        angle = angle + 100
+        local spinCFrame = CFrame.Angles(
+            math.rad(angle),
+            math.rad(angle * 1.5),
+            math.rad(angle * 0.7)
+        )
+
         pcall(function()
-            hrp.CFrame = targetHRP.CFrame
+            hrp.CFrame = targetHRP.CFrame * spinCFrame
             thr.Location = targetHRP.Position
+            spin.CFrame = targetHRP.CFrame * spinCFrame
         end)
 
-        -- Max out velocity too for extra impact
         pcall(function()
-            hrp.AssemblyLinearVelocity = Vector3.new(999999, 999999, 999999)
-            hrp.AssemblyAngularVelocity = Vector3.new(999999, 999999, 999999)
+            hrp.AssemblyLinearVelocity = Vector3.new(
+                math.random(-999999, 999999),
+                999999,
+                math.random(-999999, 999999)
+            )
+            hrp.AssemblyAngularVelocity = Vector3.new(
+                math.random(-999999, 999999),
+                999999,
+                math.random(-999999, 999999)
+            )
         end)
 
-        -- Stop after 3 seconds or when target is gone
         if tick() - startTime > 3 then
             if conn then conn:Disconnect() end
         end
@@ -632,6 +655,44 @@ local function aggressiveFling(target)
 
     if conn then conn:Disconnect() end
     if thr then pcall(function() thr:Destroy() end) end
+    if spin then pcall(function() spin:Destroy() end) end
+
+    -- ZERO velocities — critical
+    if hrp and hrp.Parent then
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        end)
+    end
+
+    -- Break physical momentum
+    if hum then
+        pcall(function()
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end)
+        task.wait(0.05)
+        pcall(function()
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+        end)
+    end
+
+    -- Teleport back to saved position
+    if hrp and hrp.Parent then
+        pcall(function()
+            hrp.CFrame = savedCFrame
+        end)
+    end
+
+    -- Hold position for 15 frames so the server agrees
+    for i = 1, 15 do
+        if not (hrp and hrp.Parent) then break end
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            hrp.CFrame = savedCFrame
+        end)
+        task.wait(0.03)
+    end
 
     flinging = false
     setStatus("Fling complete")
@@ -711,4 +772,5 @@ LocalPlayer.CharacterAdded:Connect(function()
     end
 end)
 
-print("MM2 Auto Pickup + Fling + Role Tracker Loaded!")
+print("MM2 Auto Pickup + Spinning Fling + Role Tracker Loaded!")
+print("Fling: BodyThrust + Torso Spin + Self-Restore")
