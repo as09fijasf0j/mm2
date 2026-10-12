@@ -1,7 +1,7 @@
 -- Custom Auto Pickup Gun Script for MM2 (Teleport Chain + CFrame Fling)
 -- Mobile Friendly with Clean Draggable GUI
 -- Role detection via Character AND Backpack scanning
--- Fling uses direct CFrame manipulation (bypasses NetworkOwnership)
+-- Fling uses SetPrimaryPartCFrame (bypasses NetworkOwnership)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -462,7 +462,7 @@ local function findRolePlayer(roleName)
 end
 
 --============================================================
--- FLING LOGIC (CFrame-based, bypasses NetworkOwnership)
+-- FLING LOGIC (Using SetPrimaryPartCFrame technique)
 --============================================================
 
 local function flingTarget(targetHRP)
@@ -491,7 +491,7 @@ local function flingTarget(targetHRP)
         targetHRP.RotVelocity = Vector3.new(0, 0, 0)
     end)
 
-    -- Main fling loop: rapidly alternate CFrame positions
+    -- Main fling loop: rapidly alternate CFrame positions using SetPrimaryPartCFrame
     local startTime = tick()
     local angle = 0
 
@@ -501,29 +501,26 @@ local function flingTarget(targetHRP)
         angle = angle + FLING_SPIN_SPEED
         local spinCFrame = CFrame.Angles(math.rad(angle), 0, 0)
 
-        -- Position 1: above + spin
+        -- Use SetPrimaryPartCFrame on the character model (the working technique)
         pcall(function()
-            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 1.5, 0) * spinCFrame
+            character:SetPrimaryPartCFrame(targetHRP.CFrame * CFrame.new(0, 1.5, 0) * spinCFrame)
         end)
         task.wait()
 
-        -- Position 2: below + spin
         pcall(function()
-            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, -1.5, 0) * spinCFrame
+            character:SetPrimaryPartCFrame(targetHRP.CFrame * CFrame.new(0, -1.5, 0) * spinCFrame)
         end)
         task.wait()
 
-        -- Position 3: above + massive velocity
         pcall(function()
-            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 1.5, 0) * spinCFrame
+            character:SetPrimaryPartCFrame(targetHRP.CFrame * CFrame.new(0, 1.5, 0) * spinCFrame)
             targetHRP.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
             targetHRP.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
         end)
         task.wait()
 
-        -- Position 4: below again
         pcall(function()
-            targetHRP.CFrame = targetHRP.CFrame * CFrame.new(0, -1.5, 0) * spinCFrame
+            character:SetPrimaryPartCFrame(targetHRP.CFrame * CFrame.new(0, -1.5, 0) * spinCFrame)
         end)
         task.wait()
     end
@@ -570,6 +567,7 @@ ToggleButton.MouseButton1Click:Connect(function()
     if AUTO_PICKUP_ENABLED then
         ToggleButton.Text = "AUTO PICKUP: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(60, 200, 100)
+        startAutoPickup()
     else
         ToggleButton.Text = "AUTO PICKUP: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
@@ -609,4 +607,4 @@ end)
 
 print("MM2 Auto Pickup + CFrame Fling Loaded!")
 print("Role detection: Character AND Backpack")
-print("Fling: CFrame-based (bypasses NetworkOwnership)")
+print("Fling: SetPrimaryPartCFrame (working technique)")
