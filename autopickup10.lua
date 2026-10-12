@@ -1,4 +1,4 @@
--- MM2 Auto Pickup + Engine Fling + Role Tracker
+-- MM2 Auto Pickup + Role Tracker + Fling (Custom GUI)
 -- Mobile Friendly with Clean Draggable GUI
 
 local Players = game:GetService("Players")
@@ -31,7 +31,6 @@ ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- MAIN PANEL
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
 MainFrame.Size = UDim2.new(0, 240, 0, 290)
@@ -50,7 +49,6 @@ MainStroke.Color = Color3.fromRGB(70, 70, 85)
 MainStroke.Thickness = 1.5
 MainStroke.Parent = MainFrame
 
--- Top bar
 local TopBar = Instance.new("Frame")
 TopBar.Name = "TopBar"
 TopBar.Size = UDim2.new(1, 0, 0, 34)
@@ -91,7 +89,6 @@ HintLabel.Font = Enum.Font.Gotham
 HintLabel.TextXAlignment = Enum.TextXAlignment.Left
 HintLabel.Parent = MainFrame
 
--- Lobby lock
 local LobbyLockButton = Instance.new("TextButton")
 LobbyLockButton.Name = "LobbyLockButton"
 LobbyLockButton.Size = UDim2.new(1, -24, 0, 38)
@@ -109,7 +106,6 @@ local LobbyLockCorner = Instance.new("UICorner")
 LobbyLockCorner.CornerRadius = UDim.new(0, 10)
 LobbyLockCorner.Parent = LobbyLockButton
 
--- Auto pickup
 local ToggleButton = Instance.new("TextButton")
 ToggleButton.Name = "ToggleButton"
 ToggleButton.Size = UDim2.new(1, -24, 0, 38)
@@ -127,7 +123,6 @@ local ToggleCorner = Instance.new("UICorner")
 ToggleCorner.CornerRadius = UDim.new(0, 10)
 ToggleCorner.Parent = ToggleButton
 
--- Target box
 local TargetLabel = Instance.new("TextLabel")
 TargetLabel.Size = UDim2.new(1, -24, 0, 14)
 TargetLabel.Position = UDim2.new(0, 12, 0, 142)
@@ -172,7 +167,6 @@ TargetBox:GetPropertyChangedSignal("Text"):Connect(function()
     TARGET_PLAYER_NAME = TargetBox.Text
 end)
 
--- Fling header
 local FlingLabel = Instance.new("TextLabel")
 FlingLabel.Size = UDim2.new(1, -24, 0, 14)
 FlingLabel.Position = UDim2.new(0, 12, 0, 200)
@@ -218,7 +212,6 @@ local FlingSCorner = Instance.new("UICorner")
 FlingSCorner.CornerRadius = UDim.new(0, 10)
 FlingSCorner.Parent = FlingSheriffButton
 
--- Status
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Name = "StatusLabel"
 StatusLabel.Size = UDim2.new(1, -24, 0, 16)
@@ -239,7 +232,7 @@ local function setStatus(msg)
 end
 
 --============================================================
--- ROLE TRACKER (Top Right)
+-- ROLE TRACKER
 --============================================================
 
 local RoleFrame = Instance.new("Frame")
@@ -566,7 +559,7 @@ local function findRolePlayer(roleName)
 end
 
 --============================================================
--- ENGINE-LEVEL FLING (v2 — stronger + self-restore)
+-- FLING (Best available technique)
 --============================================================
 
 local function flingTarget(targetHRP)
@@ -582,7 +575,6 @@ local function flingTarget(targetHRP)
     flinging = true
     setStatus("Flinging...")
 
-    -- Save original position AND original part properties
     local savedCFrame = root.CFrame
     local savedProps = {}
     for _, v in ipairs(char:GetDescendants()) do
@@ -595,46 +587,42 @@ local function flingTarget(targetHRP)
         end
     end
 
-    -- Force our parts to be heavy and collidable so physics registers the collision
     for _, v in ipairs(char:GetDescendants()) do
         if v:IsA("BasePart") then
             pcall(function()
-                v.CustomPhysicalProperties = PhysicalProperties.new(200, 0.1, 0.8)
+                v.CustomPhysicalProperties = PhysicalProperties.new(500, 0.05, 0.9)
                 v.CanCollide = true
                 v.Massless = false
             end)
         end
     end
 
-    local connection
-    local startTime = tick()
-    local flingDuration = 0.7
+    pcall(function() targetHRP:SetNetworkOwner(LocalPlayer) end)
 
-    connection = RunService.Stepped:Connect(function()
+    local startTime = tick()
+    local flingDuration = 1.0
+    local angle = 0
+    local conn
+    conn = RunService.Stepped:Connect(function()
         if not (targetHRP and targetHRP.Parent and root and root.Parent) then
-            if connection then connection:Disconnect() end
+            if conn then conn:Disconnect() end
             return
         end
+
+        angle = angle + 100
+        local spin = CFrame.Angles(math.rad(angle), 0, 0)
 
         pcall(function()
             root.CanCollide = true
 
             root.CFrame = targetHRP.CFrame * CFrame.new(
-                math.random(-2, 2) / 10,
-                math.random(-2, 2) / 10,
-                math.random(-2, 2) / 10
-            )
+                math.random(-3, 3) / 10,
+                math.random(-3, 3) / 10,
+                math.random(-3, 3) / 10
+            ) * spin
 
-            root.AssemblyLinearVelocity = Vector3.new(
-                math.random(-500000, 500000),
-                500000,
-                math.random(-500000, 500000)
-            )
-            root.AssemblyAngularVelocity = Vector3.new(
-                math.random(-500000, 500000),
-                500000,
-                math.random(-500000, 500000)
-            )
+            root.AssemblyLinearVelocity = Vector3.new(500000, 500000, 500000)
+            root.AssemblyAngularVelocity = Vector3.new(500000, 500000, 500000)
 
             for _, v in ipairs(targetHRP.Parent:GetDescendants()) do
                 if v:IsA("BasePart") then
@@ -647,15 +635,13 @@ local function flingTarget(targetHRP)
         end)
 
         if tick() - startTime > flingDuration then
-            if connection then connection:Disconnect() end
+            if conn then conn:Disconnect() end
         end
     end)
 
     task.wait(flingDuration)
+    if conn then conn:Disconnect() end
 
-    if connection then connection:Disconnect() end
-
-    -- SNAP BACK IMMEDIATELY to your original spot
     if root and root.Parent then
         pcall(function()
             root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -664,7 +650,6 @@ local function flingTarget(targetHRP)
         end)
     end
 
-    -- Restore original part properties
     for part, props in pairs(savedProps) do
         if part and part.Parent then
             pcall(function()
@@ -677,8 +662,7 @@ local function flingTarget(targetHRP)
         end
     end
 
-    -- Re-snap after one more frame in case physics drifted
-    task.wait(0.05)
+    task.wait(0.1)
     if root and root.Parent then
         pcall(function()
             root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -754,4 +738,4 @@ LocalPlayer.CharacterAdded:Connect(function()
     end
 end)
 
-print("MM2 Auto Pickup + Engine Fling + Role Tracker Loaded!")
+print("MM2 Auto Pickup + Fling + Role Tracker Loaded!")
