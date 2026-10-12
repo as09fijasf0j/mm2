@@ -19,6 +19,7 @@ local TARGET_PLAYER_NAME = ""
 local chainRunning = false
 local roleTrackerConn = nil
 local flinging = false
+local flingThread = nil
 
 --============================================================
 -- GUI
@@ -559,120 +560,92 @@ local function findRolePlayer(roleName)
 end
 
 --============================================================
--- FLING (Best available technique)
+-- FLING (BodyThrust technique)
 --============================================================
 
-local function flingTarget(targetHRP)
-    if not targetHRP or not targetHRP.Parent then return end
+local function stopFling()
+    flinging = false
+    if flingThread then
+        pcall(function() task.cancel(flingThread) end)
+        flingThread = nil
+    end
+end
+
+local function aggressiveFling(target)
+    if not target or not target.Character then return end
     if flinging then return end
 
     local char = LocalPlayer.Character
     if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not root or not humanoid then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
     flinging = true
     setStatus("Flinging...")
 
-    local savedCFrame = root.CFrame
-    local savedProps = {}
-    for _, v in ipairs(char:GetDescendants()) do
-        if v:IsA("BasePart") then
-            savedProps[v] = {
-                CanCollide = v.CanCollide,
-                Massless = v.Massless,
-                CustomPhysicalProperties = v.CustomPhysicalProperties
-            }
-        end
-    end
+    -- Create BodyThrust on our own HumanoidRootPart
+    local thr = Instance.new("BodyThrust")
+    thr.Name = "FlingThrust"
+    thr.Force = Vector3.new(999999, 999999, 999999)
+    thr.Location = hrp.Position
+    thr.Parent = hrp
 
-    for _, v in ipairs(char:GetDescendants()) do
-        if v:IsA("BasePart") then
-            pcall(function()
-                v.CustomPhysicalProperties = PhysicalProperties.new(500, 0.05, 0.9)
-                v.CanCollide = true
-                v.Massless = false
-            end)
-        end
-    end
-
-    pcall(function() targetHRP:SetNetworkOwner(LocalPlayer) end)
-
-    local startTime = tick()
-    local flingDuration = 1.0
-    local angle = 0
     local conn
-    conn = RunService.Stepped:Connect(function()
-        if not (targetHRP and targetHRP.Parent and root and root.Parent) then
+    local startTime = tick()
+
+    conn = RunService.Heartbeat:Connect(function()
+        if not flinging then
             if conn then conn:Disconnect() end
             return
         end
 
-        angle = angle + 100
-        local spin = CFrame.Angles(math.rad(angle), 0, 0)
+        local targetChar = target.Character
+        if not targetChar then
+            if conn then conn:Disconnect() end
+            return
+        end
+
+        local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
+        if not targetHRP then
+            if conn then conn:Disconnect() end
+            return
+        end
 
         pcall(function()
-            root.CanCollide = true
-
-            root.CFrame = targetHRP.CFrame * CFrame.new(
-                math.random(-3, 3) / 10,
-                math.random(-3, 3) / 10,
-                math.random(-3, 3) / 10
-            ) * spin
-
-            root.AssemblyLinearVelocity = Vector3.new(500000, 500000, 500000)
-            root.AssemblyAngularVelocity = Vector3.new(500000, 500000, 500000)
-
-            for _, v in ipairs(targetHRP.Parent:GetDescendants()) do
-                if v:IsA("BasePart") then
-                    pcall(function()
-                        v.CanCollide = true
-                        v.Massless = false
-                    end)
-                end
-            end
+            hrp.CFrame = targetHRP.CFrame
+            thr.Location = targetHRP.Position
         end)
 
-        if tick() - startTime > flingDuration then
+        -- Max out velocity too for extra impact
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.new(999999, 999999, 999999)
+            hrp.AssemblyAngularVelocity = Vector3.new(999999, 999999, 999999)
+        end)
+
+        -- Stop after 3 seconds or when target is gone
+        if tick() - startTime > 3 then
             if conn then conn:Disconnect() end
         end
     end)
 
-    task.wait(flingDuration)
+    task.wait(3)
+
     if conn then conn:Disconnect() end
-
-    if root and root.Parent then
-        pcall(function()
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-            root.CFrame = savedCFrame
-        end)
-    end
-
-    for part, props in pairs(savedProps) do
-        if part and part.Parent then
-            pcall(function()
-                part.CanCollide = props.CanCollide
-                part.Massless = props.Massless
-                if props.CustomPhysicalProperties then
-                    part.CustomPhysicalProperties = props.CustomPhysicalProperties
-                end
-            end)
-        end
-    end
-
-    task.wait(0.1)
-    if root and root.Parent then
-        pcall(function()
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-            root.CFrame = savedCFrame
-        end)
-    end
+    if thr then pcall(function() thr:Destroy() end) end
 
     flinging = false
     setStatus("Fling complete")
+end
+
+local function startFling(targetPlr)
+    if not targetPlr then
+        setStatus("Target not found")
+        return
+    end
+    stopFling()
+    flingThread = task.spawn(function()
+        aggressiveFling(targetPlr)
+    end)
 end
 
 --============================================================
@@ -711,9 +684,9 @@ end)
 
 FlingMurdererButton.MouseButton1Click:Connect(function()
     local plr, hrp = findRolePlayer("murderer")
-    if plr and hrp then
+    if plr then
         setStatus("Flinging murderer: " .. plr.Name)
-        task.spawn(function() flingTarget(hrp) end)
+        startFling(plr)
     else
         setStatus("Murderer not found")
     end
@@ -721,9 +694,9 @@ end)
 
 FlingSheriffButton.MouseButton1Click:Connect(function()
     local plr, hrp = findRolePlayer("sheriff")
-    if plr and hrp then
+    if plr then
         setStatus("Flinging sheriff: " .. plr.Name)
-        task.spawn(function() flingTarget(hrp) end)
+        startFling(plr)
     else
         setStatus("Sheriff not found")
     end
