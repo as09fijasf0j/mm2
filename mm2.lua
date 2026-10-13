@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer
 -- Configuration
 local TELEPORT_OFFSET = 3
 local RETURN_DELAY = 0.25
-local RESET_DELAY = 3
+local RESET_DELAY = 2
 local POST_RESET_COOLDOWN = 4  -- seconds to wait after a reset before allowing another chain
 local LOBBY_LOCK_ENABLED = false
 local AUTO_PICKUP_ENABLED = false
