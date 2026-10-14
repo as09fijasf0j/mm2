@@ -7,9 +7,9 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- Configuration
-local RESET_DELAY = 0.45 -- Time spent pinned to target's head before resetting so server replicates position
+local RESET_DELAY = 0.55 -- Time spent pinned to target's head before resetting so server replicates position
 local POST_RESET_COOLDOWN = 4
-local FLING_DURATION = 2.5
+local FLING_DURATION = 2.0
 local LOBBY_LOCK_ENABLED = false
 local AUTO_PICKUP_ENABLED = false
 local ESP_ENABLED = true
@@ -21,6 +21,9 @@ local flingRunning = false
 local chainCooldownUntil = 0
 local cachedLobbyCF = nil
 
+getgenv().OldPos = nil
+getgenv().FPDH = workspace.FallenPartsDestroyHeight
+
 -- Cached Role Data
 local CurrentMurderer = nil
 local CurrentSheriff = nil
@@ -30,7 +33,7 @@ local IsAliveInRound = false
 -- GUI SETUP
 --============================================================
 
-local parentGui = (gethui and gethui()) or pcall(function() return CoreGui end) and CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+local parentGui = (gethui and gethui()) or (pcall(function() return CoreGui end) and CoreGui) or LocalPlayer:WaitForChild("PlayerGui")
 if parentGui:FindFirstChild("MM2UtilityGui") then
     parentGui.MM2UtilityGui:Destroy()
 end
@@ -335,12 +338,10 @@ local function createHighlight(name, fillColor, outlineColor)
     return hl
 end
 
--- Dedicated Highlight instances (prevents Roblox's 31-Highlight limit bug)
 local MurdererHighlight = createHighlight("MurdererESP", Color3.fromRGB(255, 45, 45), Color3.fromRGB(255, 180, 180))
 local SheriffHighlight  = createHighlight("SheriffESP",  Color3.fromRGB(45, 125, 255), Color3.fromRGB(180, 220, 255))
 local GunDropHighlight  = createHighlight("GunDropESP",  Color3.fromRGB(45, 255, 95),  Color3.fromRGB(200, 255, 200))
 
--- Floating Billboard label for GunDrop so it's easy to spot even when tiny
 local GunBillboard = Instance.new("BillboardGui")
 GunBillboard.Name = "GunDropTag"
 GunBillboard.Size = UDim2.new(0, 110, 0, 26)
@@ -385,7 +386,7 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 --============================================================
--- HELPER FUNCTIONS (Defined before Role & Delivery Logic)
+-- HELPER FUNCTIONS
 --============================================================
 
 local function hasTool(plr, toolName)
@@ -411,6 +412,10 @@ end
 
 local function isLocalPlayerSheriff()
     return hasTool(LocalPlayer, "Gun")
+end
+
+local function isLocalPlayerMurderer()
+    return hasTool(LocalPlayer, "Knife")
 end
 
 local function isOnCooldown()
@@ -444,7 +449,7 @@ local function isInLobby()
     if not canAct() then return true end
     local root = getRoot()
     local lobbyCF = getLobbyCFrame()
-    if not root or not lobbyCF then return true end
+    if not root or not lobbyCF then return false end
     return (root.Position - lobbyCF.Position).Magnitude < 120
 end
 
@@ -474,15 +479,16 @@ local function doReset()
 end
 
 local function findGunDrop()
-    local gunDrop = workspace:FindFirstChild("GunDrop", true)
-    if gunDrop and gunDrop:IsA("BasePart") then
-        return gunDrop
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name == "GunDrop" and obj:IsA("BasePart") and obj.Parent then
+            return obj
+        end
     end
     return nil
 end
 
 --============================================================
--- MM2 CORE & ROLE DETECTION (GetPlayerData + Tool Fallback)
+-- MM2 CORE & ROLE DETECTION
 --============================================================
 
 local getPlayerDataRemote = nil
@@ -503,7 +509,6 @@ local function updateESP(gunDropPart)
         return
     end
 
-    -- 1. Murderer ESP (Red)
     local mChar = (CurrentMurderer and CurrentMurderer ~= LocalPlayer) and CurrentMurderer.Character or nil
     if mChar and mChar:FindFirstChildOfClass("Humanoid") and mChar.Humanoid.Health > 0 then
         MurdererHighlight.Adornee = mChar
@@ -513,7 +518,6 @@ local function updateESP(gunDropPart)
         MurdererHighlight.Enabled = false
     end
 
-    -- 2. Sheriff / Hero ESP (Blue)
     local sChar = (CurrentSheriff and CurrentSheriff ~= LocalPlayer) and CurrentSheriff.Character or nil
     if sChar and sChar:FindFirstChildOfClass("Humanoid") and sChar.Humanoid.Health > 0 then
         SheriffHighlight.Adornee = sChar
@@ -523,7 +527,6 @@ local function updateESP(gunDropPart)
         SheriffHighlight.Enabled = false
     end
 
-    -- 3. Dropped Gun ESP (Green)
     if gunDropPart and gunDropPart.Parent then
         GunDropHighlight.Adornee = gunDropPart
         GunDropHighlight.Enabled = true
@@ -541,7 +544,6 @@ local function updateRoles()
     local foundMurderer, foundSheriff = nil, nil
     local localAlive = false
 
-    -- 1. Try MM2's internal GetPlayerData remote first (works before tools are equipped)
     if not getPlayerDataRemote then
         getPlayerDataRemote = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
     end
@@ -570,7 +572,6 @@ local function updateRoles()
         end
     end
 
-    -- 2. Fallback / Instant Override via Backpack & Character Tools (Knife / Gun)
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr.Character and plr.Character:FindFirstChildOfClass("Humanoid") and plr.Character.Humanoid.Health > 0 then
             if hasTool(plr, "Knife") then
@@ -581,7 +582,7 @@ local function updateRoles()
         end
     end
 
-    if not localAlive and canAct() and not isInLobby() then
+    if not localAlive and canAct() then
         localAlive = true
     end
 
@@ -594,19 +595,19 @@ local function updateRoles()
 end
 
 --============================================================
--- SKIDFLING ENGINE (Fling Murderer / Fling Sheriff)
+-- WORKING SKIDFLING ENGINE (from zqyDSUWX)
 --============================================================
 
-local function flingPlayer(targetPlr, roleLabel)
+local function flingPlayer(TargetPlayer, roleLabel)
     if flingRunning or chainRunning then
         setStatus("Busy with another action!")
         return
     end
-    if not targetPlr or not targetPlr.Character then
+    if not TargetPlayer or not TargetPlayer.Character then
         setStatus("No valid " .. roleLabel .. " found!")
         return
     end
-    if targetPlr == LocalPlayer then
+    if TargetPlayer == LocalPlayer then
         setStatus("You are the " .. roleLabel .. "!")
         return
     end
@@ -615,86 +616,157 @@ local function flingPlayer(targetPlr, roleLabel)
         return
     end
 
-    local char = LocalPlayer.Character
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    local root = getRoot()
+    local Character = LocalPlayer.Character
+    local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+    local RootPart = Humanoid and Humanoid.RootPart
+    local TCharacter = TargetPlayer.Character
+    if not TCharacter then return end
 
-    local tChar = targetPlr.Character
-    local tHum = tChar:FindFirstChildOfClass("Humanoid")
-    local tRoot = tChar:FindFirstChild("HumanoidRootPart") or tChar:FindFirstChild("Torso") or tChar:FindFirstChild("UpperTorso")
+    local THumanoid = TCharacter:FindFirstChildOfClass("Humanoid")
+    local TRootPart = THumanoid and THumanoid.RootPart
+    local THead = TCharacter:FindFirstChild("Head")
+    local Accessory = TCharacter:FindFirstChildOfClass("Accessory")
+    local Handle = Accessory and Accessory:FindFirstChild("Handle")
 
-    if not tRoot or not tHum or tHum.Health <= 0 then
-        setStatus(roleLabel .. " is already dead!")
+    if not (Character and Humanoid and RootPart) then
+        setStatus("Your character is not ready!")
+        return
+    end
+
+    if THumanoid and THumanoid.Sit then
+        setStatus(TargetPlayer.Name .. " is sitting!")
+        return
+    end
+
+    if not TCharacter:FindFirstChildWhichIsA("BasePart") then
+        setStatus(roleLabel .. " has no valid parts!")
         return
     end
 
     flingRunning = true
-    setStatus("Flinging " .. targetPlr.Name .. "...")
+    setStatus("Flinging " .. TargetPlayer.Name .. "...")
 
-    local oldCFrame = root.CFrame
-    local oldDestroyHeight = workspace.FallenPartsDestroyHeight
+    if RootPart.Velocity.Magnitude < 50 then
+        getgenv().OldPos = RootPart.CFrame
+    end
+
+    if THead then
+        workspace.CurrentCamera.CameraSubject = THead
+    elseif Handle then
+        workspace.CurrentCamera.CameraSubject = Handle
+    elseif THumanoid and TRootPart then
+        workspace.CurrentCamera.CameraSubject = THumanoid
+    end
+
+    local FPos = function(BasePart, Pos, Ang)
+        if not RootPart or not RootPart.Parent or not BasePart or not BasePart.Parent then return end
+        local targetCF = CFrame.new(BasePart.Position) * Pos * Ang
+        RootPart.CFrame = targetCF
+        pcall(function()
+            Character:SetPrimaryPartCFrame(targetCF)
+        end)
+        RootPart.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
+        RootPart.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+    end
+
+    local SFBasePart = function(BasePart)
+        local TimeToWait = FLING_DURATION
+        local Time = tick()
+        local Angle = 0
+        repeat
+            if RootPart and THumanoid and BasePart and BasePart.Parent then
+                if BasePart.Velocity.Magnitude < 50 then
+                    Angle = Angle + 100
+                    FPos(BasePart, CFrame.new(0, 1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, 1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, 1.5, 0) + THumanoid.MoveDirection, CFrame.Angles(math.rad(Angle), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, 0) + THumanoid.MoveDirection, CFrame.Angles(math.rad(Angle), 0, 0))
+                    task.wait()
+                else
+                    FPos(BasePart, CFrame.new(0, 1.5, THumanoid.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, -THumanoid.WalkSpeed), CFrame.Angles(0, 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, 1.5, THumanoid.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(math.rad(90), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(0, 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(math.rad(90), 0, 0))
+                    task.wait()
+                    FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(0, 0, 0))
+                    task.wait()
+                end
+            else
+                break
+            end
+        until BasePart.Velocity.Magnitude > 500 or BasePart.Parent ~= TCharacter or TargetPlayer.Parent ~= Players or not TCharacter:IsDescendantOf(workspace) or THumanoid.Sit or Humanoid.Health <= 0 or tick() > Time + TimeToWait
+    end
+
     workspace.FallenPartsDestroyHeight = 0 / 0
 
-    local noclipConn = RunService.Stepped:Connect(function()
-        if LocalPlayer.Character then
-            for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+    local BV = Instance.new("BodyVelocity")
+    BV.Name = "EpixVel"
+    BV.Parent = RootPart
+    BV.Velocity = Vector3.new(9e8, 9e8, 9e8)
+    BV.MaxForce = Vector3.new(1 / 0, 1 / 0, 1 / 0)
+
+    Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+
+    if TRootPart and THead then
+        if (TRootPart.CFrame.p - THead.CFrame.p).Magnitude > 5 then
+            SFBasePart(THead)
+        else
+            SFBasePart(TRootPart)
+        end
+    elseif TRootPart and not THead then
+        SFBasePart(TRootPart)
+    elseif not TRootPart and THead then
+        SFBasePart(THead)
+    elseif not TRootPart and not THead and Accessory and Handle then
+        SFBasePart(Handle)
+    else
+        BV:Destroy()
+        Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+        workspace.CurrentCamera.CameraSubject = Humanoid
+        flingRunning = false
+        setStatus("No valid parts to fling!")
+        return
+    end
+
+    BV:Destroy()
+    Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+    workspace.CurrentCamera.CameraSubject = Humanoid
+
+    if getgenv().OldPos then
+        local returnStart = tick()
+        repeat
+            if not canAct() then break end
+            RootPart.CFrame = getgenv().OldPos * CFrame.new(0, 0.5, 0)
+            pcall(function()
+                Character:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, 0.5, 0))
+            end)
+            Humanoid:ChangeState("GettingUp")
+            for _, part in pairs(Character:GetChildren()) do
                 if part:IsA("BasePart") then
-                    part.CanCollide = false
+                    part.Velocity, part.RotVelocity = Vector3.new(), Vector3.new()
                 end
             end
-        end
-    end)
-
-    local startTime = os.clock()
-    local angle = 0
-
-    while os.clock() - startTime < FLING_DURATION do
-        if not canAct() or not tChar.Parent or not tRoot.Parent or tHum.Health <= 0 then
-            break
-        end
-        if tRoot.Velocity.Magnitude > 450 then
-            break
-        end
-
-        angle = angle + 100
-        local moveOffset = tHum.MoveDirection * (tRoot.Velocity.Magnitude / 1.25)
-        local targetCF = CFrame.new(tRoot.Position + moveOffset) * CFrame.Angles(math.rad(angle), math.rad(angle), 0)
-
-        pcall(function()
-            hum.Sit = false
-            root.CFrame = targetCF
-            root.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
-            root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
-        end)
-        RunService.Heartbeat:Wait()
-
-        pcall(function()
-            root.CFrame = CFrame.new(tRoot.Position) * CFrame.new(0, -1.5, 0) * CFrame.Angles(math.rad(angle), 0, 0)
-            root.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
-            root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
-        end)
-        RunService.RenderStepped:Wait()
+            task.wait()
+        until (RootPart.Position - getgenv().OldPos.p).Magnitude < 25 or tick() - returnStart > 2.5
+        workspace.FallenPartsDestroyHeight = getgenv().FPDH
     end
 
-    if noclipConn then noclipConn:Disconnect() end
-
-    if canAct() and root then
-        for _ = 1, 8 do
-            pcall(function()
-                root.CFrame = oldCFrame
-                root.Velocity = Vector3.zero
-                root.RotVelocity = Vector3.zero
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-            end)
-            RunService.Heartbeat:Wait()
-        end
-    end
-
-    workspace.FallenPartsDestroyHeight = oldDestroyHeight
     flingRunning = false
-    setStatus("Finished flinging " .. targetPlr.Name)
+    setStatus("Finished flinging " .. TargetPlayer.Name)
 end
 
 --============================================================
@@ -721,7 +793,7 @@ local function resetOnTargetHead(targetPlr)
             pcall(function()
                 root.Velocity = Vector3.zero
                 root.AssemblyLinearVelocity = Vector3.zero
-                root.CFrame = tHead.CFrame * CFrame.new(0, 1.8, 0)
+                root.CFrame = tHead.CFrame * CFrame.new(0, 1.5, 0)
             end)
         end
         RunService.Heartbeat:Wait()
@@ -731,11 +803,11 @@ local function resetOnTargetHead(targetPlr)
         startCooldown()
         doReset()
         local postStart = os.clock()
-        while os.clock() - postStart < 0.25 and LocalPlayer.Character do
+        while os.clock() - postStart < 0.3 and LocalPlayer.Character do
             local root = getRoot()
             if root and tHead and tHead.Parent then
                 pcall(function()
-                    root.CFrame = tHead.CFrame * CFrame.new(0, 1.8, 0)
+                    root.CFrame = tHead.CFrame * CFrame.new(0, 1.5, 0)
                 end)
             end
             RunService.Heartbeat:Wait()
@@ -743,30 +815,54 @@ local function resetOnTargetHead(targetPlr)
     end
 end
 
+local function touchGunWithCharacter(gunPart)
+    local char = LocalPlayer.Character
+    if not char or not gunPart or not gunPart.Parent then return end
+    if firetouchinterest then
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                pcall(function()
+                    firetouchinterest(part, gunPart, 0)
+                    firetouchinterest(part, gunPart, 1)
+                end)
+            end
+        end
+    end
+end
+
 local function runGunDeliveryChain(gunPart)
-    if isOnCooldown() or not canAct() or flingRunning then
+    if isOnCooldown() or not canAct() or flingRunning or isLocalPlayerMurderer() then
         chainRunning = false
         return
     end
 
+    local root = getRoot()
+    local oldSafeCF = root and root.CFrame or nil
+
+    -- Step 1: Grab the dropped gun if we don't already have it
     if not isLocalPlayerSheriff() and gunPart and gunPart.Parent then
         setStatus("Grabbing dropped gun...")
         local grabStart = os.clock()
+        local step = 0
 
-        while os.clock() - grabStart < 1.2 do
-            if not canAct() or isLocalPlayerSheriff() or not gunPart.Parent then
+        while os.clock() - grabStart < 2.2 do
+            if not canAct() or isLocalPlayerSheriff() or not gunPart or not gunPart.Parent then
                 break
             end
-            local root = getRoot()
+            root = getRoot()
+            local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
             if root then
+                step = step + 1
+                -- Micro-oscillate height & position on GunDrop so server physics registers touch
+                local yOffset = (step % 2 == 0) and 0.2 or -0.5
+                local xOffset = (step % 4 < 2) and 0.15 or -0.15
                 pcall(function()
-                    root.Velocity = Vector3.zero
-                    root.CFrame = gunPart.CFrame
-                    if firetouchinterest then
-                        firetouchinterest(root, gunPart, 0)
-                        firetouchinterest(root, gunPart, 1)
-                    end
+                    if hum and hum.Sit then hum.Sit = false end
+                    root.Velocity = Vector3.new(0, -2, 0)
+                    root.AssemblyLinearVelocity = Vector3.new(0, -2, 0)
+                    root.CFrame = CFrame.new(gunPart.Position + Vector3.new(xOffset, yOffset, 0))
                 end)
+                touchGunWithCharacter(gunPart)
             end
             RunService.Heartbeat:Wait()
         end
@@ -777,12 +873,19 @@ local function runGunDeliveryChain(gunPart)
         return
     end
 
+    -- Step 2: Check if we successfully became Sheriff/Hero
     if not isLocalPlayerSheriff() then
-        if LOBBY_LOCK_ENABLED then teleportToLobby() end
+        setStatus("Could not grab gun (taken or out of round)")
+        if LOBBY_LOCK_ENABLED then
+            teleportToLobby()
+        elseif oldSafeCF and getRoot() then
+            pcall(function() getRoot().CFrame = oldSafeCF end)
+        end
         chainRunning = false
         return
     end
 
+    -- Step 3: Deliver to Target (or Lobby Reset if Target is Murderer)
     if SelectedTarget and SelectedTarget == CurrentMurderer then
         setStatus("Target is Murderer! Resetting in lobby...")
         for _ = 1, 15 do
@@ -799,8 +902,12 @@ local function runGunDeliveryChain(gunPart)
     if SelectedTarget and SelectedTarget.Character then
         resetOnTargetHead(SelectedTarget)
     else
-        setStatus("Gun grabbed (No target selected)")
-        if LOBBY_LOCK_ENABLED then teleportToLobby() end
+        setStatus("Gun grabbed! (Select a target to deliver)")
+        if LOBBY_LOCK_ENABLED then
+            teleportToLobby()
+        elseif oldSafeCF and getRoot() then
+            pcall(function() getRoot().CFrame = oldSafeCF end)
+        end
     end
 
     chainRunning = false
@@ -815,7 +922,6 @@ local lastRoleScan = 0
 RunService.Heartbeat:Connect(function()
     local now = os.clock()
 
-    -- Scan roles & update 3D ESP every 0.3s
     if now - lastRoleScan >= 0.3 then
         lastRoleScan = now
         local gunDrop = findGunDrop()
@@ -827,33 +933,31 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    -- Lobby Lock
-    if LOBBY_LOCK_ENABLED and not isInLobby() then
-        teleportToLobby()
-    end
-
-    -- Auto Pickup & Head Reset Delivery
-    if AUTO_PICKUP_ENABLED then
-        if not IsAliveInRound or isInLobby() then
-            return
-        end
+    -- Auto Pickup & Head Reset Delivery runs BEFORE Lobby Lock so it can leave the lobby to grab the gun
+    if AUTO_PICKUP_ENABLED and not isLocalPlayerMurderer() then
         if isLocalPlayerSheriff() then
             if SelectedTarget and SelectedTarget.Character then
                 chainRunning = true
                 task.spawn(function()
                     runGunDeliveryChain(nil)
                 end)
+                return
             end
-            return
+        else
+            local gunDrop = findGunDrop()
+            if gunDrop then
+                chainRunning = true
+                task.spawn(function()
+                    runGunDeliveryChain(gunDrop)
+                end)
+                return
+            end
         end
+    end
 
-        local gunDrop = findGunDrop()
-        if gunDrop then
-            chainRunning = true
-            task.spawn(function()
-                runGunDeliveryChain(gunDrop)
-            end)
-        end
+    -- Lobby Lock (only holds you in lobby when not actively grabbing/delivering gun)
+    if LOBBY_LOCK_ENABLED and not isInLobby() then
+        teleportToLobby()
     end
 end)
 
@@ -974,4 +1078,4 @@ LocalPlayer.CharacterRemoving:Connect(function()
     startCooldown()
 end)
 
-print("MM2 Gun Delivery + SkidFling + 3D ESP Loaded!")
+print("MM2 Gun Delivery + SkidFling + 3D ESP v3 Loaded!")
