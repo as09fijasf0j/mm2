@@ -1,6 +1,5 @@
 -- MM2 Auto Pickup + Role Tracker + Player Dropdown (Custom GUI)
--- Mobile Friendly with Clean Draggable GUI
--- Sheriff mode + proper dead-state handling
+-- Smaller mobile-friendly layout + role tracker bottom-right
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -11,19 +10,18 @@ local LocalPlayer = Players.LocalPlayer
 -- Configuration
 local TELEPORT_OFFSET = 3
 local RETURN_DELAY = 0.25
-local RESET_DELAY = 2
-local POST_RESET_COOLDOWN = 4  -- seconds to wait after a reset before allowing another chain
+local RESET_DELAY = 3
+local POST_RESET_COOLDOWN = 4
 local LOBBY_LOCK_ENABLED = false
 local AUTO_PICKUP_ENABLED = false
 
--- Selected target (from dropdown)
+-- Selected target
 local SelectedTarget = nil
 
 -- Saved state
 local chainRunning = false
 local chainCooldownUntil = 0
 local roleTrackerConn = nil
-local charConn = nil
 
 --============================================================
 -- GUI
@@ -38,15 +36,15 @@ ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 240, 0, 340)
-MainFrame.Position = UDim2.new(0, 10, 0.05, 0)
+MainFrame.Size = UDim2.new(0, 180, 0, 200)
+MainFrame.Position = UDim2.new(0, 8, 0.05, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Parent = ScreenGui
 
 local MainCorner = Instance.new("UICorner")
-MainCorner.CornerRadius = UDim.new(0, 14)
+MainCorner.CornerRadius = UDim.new(0, 12)
 MainCorner.Parent = MainFrame
 
 local MainStroke = Instance.new("UIStroke")
@@ -56,98 +54,87 @@ MainStroke.Parent = MainFrame
 
 local TopBar = Instance.new("Frame")
 TopBar.Name = "TopBar"
-TopBar.Size = UDim2.new(1, 0, 0, 34)
+TopBar.Size = UDim2.new(1, 0, 0, 28)
 TopBar.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 TopBar.BorderSizePixel = 0
 TopBar.Parent = MainFrame
 
 local TopCorner = Instance.new("UICorner")
-TopCorner.CornerRadius = UDim.new(0, 14)
+TopCorner.CornerRadius = UDim.new(0, 12)
 TopCorner.Parent = TopBar
 
 local TopCover = Instance.new("Frame")
-TopCover.Size = UDim2.new(1, 0, 0, 14)
-TopCover.Position = UDim2.new(0, 0, 1, -14)
+TopCover.Size = UDim2.new(1, 0, 0, 12)
+TopCover.Position = UDim2.new(0, 0, 1, -12)
 TopCover.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 TopCover.BorderSizePixel = 0
 TopCover.Parent = TopBar
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -20, 1, 0)
-TitleLabel.Position = UDim2.new(0, 12, 0, 0)
+TitleLabel.Size = UDim2.new(1, -16, 1, 0)
+TitleLabel.Position = UDim2.new(0, 10, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "MM2 AUTO PICKUP"
 TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 240)
-TitleLabel.TextSize = 14
+TitleLabel.TextSize = 11
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = TopBar
 
-local HintLabel = Instance.new("TextLabel")
-HintLabel.Size = UDim2.new(1, -20, 0, 14)
-HintLabel.Position = UDim2.new(0, 12, 0, 34)
-HintLabel.BackgroundTransparency = 1
-HintLabel.Text = "Drag this bar to move"
-HintLabel.TextColor3 = Color3.fromRGB(120, 120, 140)
-HintLabel.TextSize = 10
-HintLabel.Font = Enum.Font.Gotham
-HintLabel.TextXAlignment = Enum.TextXAlignment.Left
-HintLabel.Parent = MainFrame
-
 local LobbyLockButton = Instance.new("TextButton")
 LobbyLockButton.Name = "LobbyLockButton"
-LobbyLockButton.Size = UDim2.new(1, -24, 0, 38)
-LobbyLockButton.Position = UDim2.new(0, 12, 0, 52)
+LobbyLockButton.Size = UDim2.new(1, -16, 0, 28)
+LobbyLockButton.Position = UDim2.new(0, 8, 0, 34)
 LobbyLockButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
 LobbyLockButton.BorderSizePixel = 0
 LobbyLockButton.Text = "LOBBY LOCK: OFF"
 LobbyLockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-LobbyLockButton.TextSize = 14
+LobbyLockButton.TextSize = 11
 LobbyLockButton.Font = Enum.Font.GothamBold
 LobbyLockButton.AutoButtonColor = false
 LobbyLockButton.Parent = MainFrame
 
 local LobbyLockCorner = Instance.new("UICorner")
-LobbyLockCorner.CornerRadius = UDim.new(0, 10)
+LobbyLockCorner.CornerRadius = UDim.new(0, 8)
 LobbyLockCorner.Parent = LobbyLockButton
 
 local ToggleButton = Instance.new("TextButton")
 ToggleButton.Name = "ToggleButton"
-ToggleButton.Size = UDim2.new(1, -24, 0, 38)
-ToggleButton.Position = UDim2.new(0, 12, 0, 96)
+ToggleButton.Size = UDim2.new(1, -16, 0, 28)
+ToggleButton.Position = UDim2.new(0, 8, 0, 66)
 ToggleButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
 ToggleButton.BorderSizePixel = 0
 ToggleButton.Text = "AUTO PICKUP: OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleButton.TextSize = 14
+ToggleButton.TextSize = 11
 ToggleButton.Font = Enum.Font.GothamBold
 ToggleButton.AutoButtonColor = false
 ToggleButton.Parent = MainFrame
 
 local ToggleCorner = Instance.new("UICorner")
-ToggleCorner.CornerRadius = UDim.new(0, 10)
+ToggleCorner.CornerRadius = UDim.new(0, 8)
 ToggleCorner.Parent = ToggleButton
 
 local TargetLabel = Instance.new("TextLabel")
-TargetLabel.Size = UDim2.new(1, -24, 0, 14)
-TargetLabel.Position = UDim2.new(0, 12, 0, 142)
+TargetLabel.Size = UDim2.new(1, -16, 0, 12)
+TargetLabel.Position = UDim2.new(0, 8, 0, 100)
 TargetLabel.BackgroundTransparency = 1
 TargetLabel.Text = "TARGET PLAYER"
 TargetLabel.TextColor3 = Color3.fromRGB(160, 160, 180)
-TargetLabel.TextSize = 10
+TargetLabel.TextSize = 9
 TargetLabel.Font = Enum.Font.GothamBold
 TargetLabel.TextXAlignment = Enum.TextXAlignment.Left
 TargetLabel.Parent = MainFrame
 
 local SelectButton = Instance.new("TextButton")
 SelectButton.Name = "SelectButton"
-SelectButton.Size = UDim2.new(1, -24, 0, 34)
-SelectButton.Position = UDim2.new(0, 12, 0, 158)
+SelectButton.Size = UDim2.new(1, -16, 0, 26)
+SelectButton.Position = UDim2.new(0, 8, 0, 114)
 SelectButton.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 SelectButton.BorderSizePixel = 0
 SelectButton.Text = "SELECT PLAYER..."
 SelectButton.TextColor3 = Color3.fromRGB(200, 200, 220)
-SelectButton.TextSize = 13
+SelectButton.TextSize = 11
 SelectButton.Font = Enum.Font.Gotham
 SelectButton.AutoButtonColor = false
 SelectButton.Parent = MainFrame
@@ -163,13 +150,13 @@ SelectStroke.Parent = SelectButton
 
 local TeleportButton = Instance.new("TextButton")
 TeleportButton.Name = "TeleportButton"
-TeleportButton.Size = UDim2.new(0.5, -18, 0, 32)
-TeleportButton.Position = UDim2.new(0, 12, 0, 200)
+TeleportButton.Size = UDim2.new(0.5, -12, 0, 26)
+TeleportButton.Position = UDim2.new(0, 8, 0, 146)
 TeleportButton.BackgroundColor3 = Color3.fromRGB(70, 120, 200)
 TeleportButton.BorderSizePixel = 0
 TeleportButton.Text = "TELEPORT"
 TeleportButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-TeleportButton.TextSize = 12
+TeleportButton.TextSize = 10
 TeleportButton.Font = Enum.Font.GothamBold
 TeleportButton.AutoButtonColor = false
 TeleportButton.Parent = MainFrame
@@ -180,13 +167,13 @@ TeleportCorner.Parent = TeleportButton
 
 local ResetButton = Instance.new("TextButton")
 ResetButton.Name = "ResetButton"
-ResetButton.Size = UDim2.new(0.5, -18, 0, 32)
-ResetButton.Position = UDim2.new(0.5, 6, 0, 200)
+ResetButton.Size = UDim2.new(0.5, -12, 0, 26)
+ResetButton.Position = UDim2.new(0.5, 4, 0, 146)
 ResetButton.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
 ResetButton.BorderSizePixel = 0
 ResetButton.Text = "RESET"
 ResetButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ResetButton.TextSize = 12
+ResetButton.TextSize = 10
 ResetButton.Font = Enum.Font.GothamBold
 ResetButton.AutoButtonColor = false
 ResetButton.Parent = MainFrame
@@ -197,12 +184,12 @@ ResetCorner.Parent = ResetButton
 
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Name = "StatusLabel"
-StatusLabel.Size = UDim2.new(1, -24, 0, 16)
-StatusLabel.Position = UDim2.new(0, 12, 0, 244)
+StatusLabel.Size = UDim2.new(1, -16, 0, 12)
+StatusLabel.Position = UDim2.new(0, 8, 0, 178)
 StatusLabel.BackgroundTransparency = 1
 StatusLabel.Text = ""
 StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
-StatusLabel.TextSize = 11
+StatusLabel.TextSize = 9
 StatusLabel.Font = Enum.Font.Gotham
 StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 StatusLabel.Parent = MainFrame
@@ -210,8 +197,8 @@ StatusLabel.Parent = MainFrame
 -- Player list popup
 local PlayerListFrame = Instance.new("ScrollingFrame")
 PlayerListFrame.Name = "PlayerListFrame"
-PlayerListFrame.Size = UDim2.new(1, -24, 0, 180)
-PlayerListFrame.Position = UDim2.new(0, 12, 0, 158)
+PlayerListFrame.Size = UDim2.new(1, -16, 0, 140)
+PlayerListFrame.Position = UDim2.new(0, 8, 0, 114)
 PlayerListFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 PlayerListFrame.BorderSizePixel = 0
 PlayerListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
@@ -249,12 +236,12 @@ local function refreshPlayerList()
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
             local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, -8, 0, 26)
+            btn.Size = UDim2.new(1, -8, 0, 22)
             btn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
             btn.BorderSizePixel = 0
             btn.Text = "  " .. plr.Name
             btn.TextColor3 = Color3.fromRGB(220, 220, 240)
-            btn.TextSize = 12
+            btn.TextSize = 10
             btn.Font = Enum.Font.Gotham
             btn.TextXAlignment = Enum.TextXAlignment.Left
             btn.AutoButtonColor = false
@@ -283,13 +270,13 @@ SelectButton.MouseButton1Click:Connect(function()
 end)
 
 --============================================================
--- ROLE TRACKER
+-- ROLE TRACKER (bottom right)
 --============================================================
 
 local RoleFrame = Instance.new("Frame")
 RoleFrame.Name = "RoleFrame"
-RoleFrame.Size = UDim2.new(0, 200, 0, 80)
-RoleFrame.Position = UDim2.new(1, -210, 0, 10)
+RoleFrame.Size = UDim2.new(0, 150, 0, 60)
+RoleFrame.Position = UDim2.new(1, -158, 1, -70)
 RoleFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 RoleFrame.BorderSizePixel = 0
 RoleFrame.Parent = ScreenGui
@@ -304,34 +291,36 @@ RoleStroke.Thickness = 1
 RoleStroke.Parent = RoleFrame
 
 local RoleTitle = Instance.new("TextLabel")
-RoleTitle.Size = UDim2.new(1, 0, 0, 24)
+RoleTitle.Size = UDim2.new(1, 0, 0, 18)
 RoleTitle.BackgroundTransparency = 1
 RoleTitle.Text = "ROLES"
 RoleTitle.TextColor3 = Color3.fromRGB(230, 230, 240)
-RoleTitle.TextSize = 12
+RoleTitle.TextSize = 10
 RoleTitle.Font = Enum.Font.GothamBold
 RoleTitle.Parent = RoleFrame
 
 local MurdererLabel = Instance.new("TextLabel")
-MurdererLabel.Size = UDim2.new(1, -20, 0, 22)
-MurdererLabel.Position = UDim2.new(0, 10, 0, 28)
+MurdererLabel.Size = UDim2.new(1, -12, 0, 16)
+MurdererLabel.Position = UDim2.new(0, 6, 0, 22)
 MurdererLabel.BackgroundTransparency = 1
-MurdererLabel.Text = "Murderer: Scanning..."
+MurdererLabel.Text = "M: ..."
 MurdererLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-MurdererLabel.TextSize = 11
+MurdererLabel.TextSize = 9
 MurdererLabel.Font = Enum.Font.Gotham
 MurdererLabel.TextXAlignment = Enum.TextXAlignment.Left
+MurdererLabel.TextTruncate = Enum.TextTruncate.AtEnd
 MurdererLabel.Parent = RoleFrame
 
 local SheriffLabel = Instance.new("TextLabel")
-SheriffLabel.Size = UDim2.new(1, -20, 0, 22)
-SheriffLabel.Position = UDim2.new(0, 10, 0, 50)
+SheriffLabel.Size = UDim2.new(1, -12, 0, 16)
+SheriffLabel.Position = UDim2.new(0, 6, 0, 40)
 SheriffLabel.BackgroundTransparency = 1
-SheriffLabel.Text = "Sheriff: Scanning..."
+SheriffLabel.Text = "S: ..."
 SheriffLabel.TextColor3 = Color3.fromRGB(100, 150, 255)
-SheriffLabel.TextSize = 11
+SheriffLabel.TextSize = 9
 SheriffLabel.Font = Enum.Font.Gotham
 SheriffLabel.TextXAlignment = Enum.TextXAlignment.Left
+SheriffLabel.TextTruncate = Enum.TextTruncate.AtEnd
 SheriffLabel.Parent = RoleFrame
 
 --============================================================
@@ -380,7 +369,6 @@ end)
 -- CORE HELPERS
 --============================================================
 
--- Dead OR respawning returns false
 local function isAlive()
     local char = LocalPlayer.Character
     if not char then return false end
@@ -390,7 +378,6 @@ local function isAlive()
     return hum.Health > 0
 end
 
--- Strict check: alive AND has root AND has humanoid with full parenting
 local function canAct()
     if not isAlive() then return false end
     local char = LocalPlayer.Character
@@ -402,7 +389,6 @@ local function canAct()
     return true
 end
 
--- Chain cooldown check
 local function isOnCooldown()
     return tick() < chainCooldownUntil
 end
@@ -528,12 +514,16 @@ local function doReset()
 end
 
 local function runSheriffChain()
-    if chainRunning then return end
-    if isOnCooldown() then return end
-    if not canAct() then return end
+    if isOnCooldown() then
+        chainRunning = false
+        return
+    end
+    if not canAct() then
+        chainRunning = false
+        return
+    end
 
-    chainRunning = true
-    setStatus("Sheriff mode: teleporting to target...")
+    setStatus("Sheriff: teleporting to target...")
 
     local targetHRP = getSelectedTargetRoot()
     if not targetHRP then
@@ -551,13 +541,12 @@ local function runSheriffChain()
 
     task.wait(RETURN_DELAY)
 
-    -- Check alive before reset
     if not canAct() then
         chainRunning = false
         return
     end
 
-    setStatus("Resetting by target in " .. RESET_DELAY .. "s...")
+    setStatus("Resetting in " .. RESET_DELAY .. "s...")
     task.wait(RESET_DELAY)
 
     if canAct() then
@@ -569,14 +558,20 @@ local function runSheriffChain()
 end
 
 local function runChain(gunPart)
-    if chainRunning then return end
-    if isOnCooldown() then return end
-    if not canAct() then return end
-
-    chainRunning = true
+    if isOnCooldown() then
+        chainRunning = false
+        return
+    end
+    if not canAct() then
+        chainRunning = false
+        return
+    end
 
     local root = getRoot()
-    if not root then chainRunning = false return end
+    if not root then
+        chainRunning = false
+        return
+    end
 
     setStatus("Chain: teleporting to gun...")
 
@@ -618,7 +613,7 @@ local function runChain(gunPart)
         return
     end
 
-    setStatus("Chain: resetting in " .. RESET_DELAY .. "s...")
+    setStatus("Resetting in " .. RESET_DELAY .. "s...")
     task.wait(RESET_DELAY)
 
     if canAct() then
@@ -661,6 +656,7 @@ local function startAutoPickup()
 
         if isLocalPlayerSheriff() then
             if SelectedTarget then
+                chainRunning = true
                 task.spawn(function() runSheriffChain() end)
             end
             return
@@ -668,6 +664,7 @@ local function startAutoPickup()
 
         local gun = findNearestGun()
         if gun then
+            chainRunning = true
             task.spawn(function() runChain(gun) end)
         end
     end)
@@ -710,8 +707,8 @@ local function updateRoleTracker()
             end
         end
     end
-    MurdererLabel.Text = "Murderer: " .. mName
-    SheriffLabel.Text = "Sheriff: " .. sName
+    MurdererLabel.Text = "M: " .. mName
+    SheriffLabel.Text = "S: " .. sName
 end
 
 local function startRoleTracker()
@@ -807,16 +804,18 @@ end)
 --============================================================
 
 LocalPlayer.CharacterAdded:Connect(function()
-    -- Reset chain state on respawn
     chainRunning = false
-
-    -- If we reset, wait the full cooldown before re-engaging
     if LOBBY_LOCK_ENABLED then
         task.wait(1)
         if canAct() then teleportToLobby() end
     end
 end)
 
+LocalPlayer.CharacterRemoving:Connect(function()
+    chainRunning = false
+    startCooldown()
+end)
+
 startRoleTracker()
 
-print("MM2 Auto Pickup + Sheriff Mode + Cooldown Loaded!")
+print("MM2 Auto Pickup + Smaller GUI + Role Tracker (bottom-right) Loaded!")
