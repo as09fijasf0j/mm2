@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -29,7 +30,7 @@ local IsAliveInRound = false
 -- GUI SETUP
 --============================================================
 
-local parentGui = (gethui and gethui()) or LocalPlayer:WaitForChild("PlayerGui")
+local parentGui = (gethui and gethui()) or pcall(function() return CoreGui end) and CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 if parentGui:FindFirstChild("MM2UtilityGui") then
     parentGui.MM2UtilityGui:Destroy()
 end
@@ -321,10 +322,6 @@ SheriffLabel.Parent = RoleFrame
 -- 3D HIGHLIGHT ESP ENGINE (Murderer, Sheriff, GunDrop)
 --============================================================
 
-local ESPFolder = Instance.new("Folder")
-ESPFolder.Name = "MM2_ESP_Container"
-ESPFolder.Parent = ScreenGui
-
 local function createHighlight(name, fillColor, outlineColor)
     local hl = Instance.new("Highlight")
     hl.Name = name
@@ -334,7 +331,7 @@ local function createHighlight(name, fillColor, outlineColor)
     hl.OutlineTransparency = 0
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Enabled = false
-    hl.Parent = ESPFolder
+    hl.Parent = ScreenGui
     return hl
 end
 
@@ -350,7 +347,7 @@ GunBillboard.Size = UDim2.new(0, 110, 0, 26)
 GunBillboard.StudsOffset = Vector3.new(0, 2, 0)
 GunBillboard.AlwaysOnTop = true
 GunBillboard.Enabled = false
-GunBillboard.Parent = ESPFolder
+GunBillboard.Parent = ScreenGui
 
 local GunTagLabel = Instance.new("TextLabel")
 GunTagLabel.Size = UDim2.new(1, 0, 1, 0)
@@ -388,13 +385,8 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 --============================================================
--- MM2 CORE & ROLE DETECTION (GetPlayerData + Tool Fallback)
+-- HELPER FUNCTIONS (Defined before Role & Delivery Logic)
 --============================================================
-
-local getPlayerDataRemote = nil
-task.spawn(function()
-    getPlayerDataRemote = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
-end)
 
 local function hasTool(plr, toolName)
     if not plr then return false end
@@ -405,6 +397,82 @@ local function hasTool(plr, toolName)
     return false
 end
 
+local function canAct()
+    local char = LocalPlayer.Character
+    if not char or not char.Parent then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    return hum ~= nil and root ~= nil and hum.Health > 0
+end
+
+local function getRoot()
+    return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+end
+
+local function isLocalPlayerSheriff()
+    return hasTool(LocalPlayer, "Gun")
+end
+
+local function isOnCooldown()
+    return os.clock() < chainCooldownUntil
+end
+
+local function startCooldown()
+    chainCooldownUntil = os.clock() + POST_RESET_COOLDOWN
+end
+
+local function getLobbyCFrame()
+    if cachedLobbyCF then return cachedLobbyCF end
+    local lobby = workspace:FindFirstChild("Lobby") or workspace:FindFirstChild("RegularLobby")
+    if lobby then
+        local spawn = lobby:FindFirstChildOfClass("SpawnLocation", true)
+        if spawn then
+            cachedLobbyCF = spawn.CFrame + Vector3.new(0, 5, 0)
+            return cachedLobbyCF
+        end
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("SpawnLocation") then
+            cachedLobbyCF = obj.CFrame + Vector3.new(0, 5, 0)
+            return cachedLobbyCF
+        end
+    end
+    return nil
+end
+
+local function isInLobby()
+    if not canAct() then return true end
+    local root = getRoot()
+    local lobbyCF = getLobbyCFrame()
+    if not root or not lobbyCF then return true end
+    return (root.Position - lobbyCF.Position).Magnitude < 120
+end
+
+local function teleportToLobby()
+    if not canAct() then return end
+    local root = getRoot()
+    local cf = getLobbyCFrame()
+    if root and cf then
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.CFrame = cf
+        end)
+    end
+end
+
+local function doReset()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        pcall(function()
+            hum.Health = 0
+            hum:ChangeState(Enum.HumanoidStateType.Dead)
+            char:BreakJoints()
+        end)
+    end
+end
+
 local function findGunDrop()
     local gunDrop = workspace:FindFirstChild("GunDrop", true)
     if gunDrop and gunDrop:IsA("BasePart") then
@@ -412,6 +480,15 @@ local function findGunDrop()
     end
     return nil
 end
+
+--============================================================
+-- MM2 CORE & ROLE DETECTION (GetPlayerData + Tool Fallback)
+--============================================================
+
+local getPlayerDataRemote = nil
+task.spawn(function()
+    getPlayerDataRemote = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
+end)
 
 local function updateESP(gunDropPart)
     if not ESP_ENABLED then
@@ -514,82 +591,6 @@ local function updateRoles()
 
     MurdererLabel.Text = "M: " .. (foundMurderer and foundMurderer.Name or "None")
     SheriffLabel.Text = "S: " .. (foundSheriff and foundSheriff.Name or "None")
-end
-
-local function canAct()
-    local char = LocalPlayer.Character
-    if not char or not char.Parent then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    local root = char:FindFirstChild("HumanoidRootPart")
-    return hum ~= nil and root ~= nil and hum.Health > 0
-end
-
-local function getRoot()
-    return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-end
-
-local function isLocalPlayerSheriff()
-    return hasTool(LocalPlayer, "Gun")
-end
-
-local function isOnCooldown()
-    return os.clock() < chainCooldownUntil
-end
-
-local function startCooldown()
-    chainCooldownUntil = os.clock() + POST_RESET_COOLDOWN
-end
-
-local function getLobbyCFrame()
-    if cachedLobbyCF then return cachedLobbyCF end
-    local lobby = workspace:FindFirstChild("Lobby") or workspace:FindFirstChild("RegularLobby")
-    if lobby then
-        local spawn = lobby:FindFirstChildOfClass("SpawnLocation", true)
-        if spawn then
-            cachedLobbyCF = spawn.CFrame + Vector3.new(0, 5, 0)
-            return cachedLobbyCF
-        end
-    end
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("SpawnLocation") then
-            cachedLobbyCF = obj.CFrame + Vector3.new(0, 5, 0)
-            return cachedLobbyCF
-        end
-    end
-    return nil
-end
-
-local function isInLobby()
-    if not canAct() then return true end
-    local root = getRoot()
-    local lobbyCF = getLobbyCFrame()
-    if not root or not lobbyCF then return true end
-    return (root.Position - lobbyCF.Position).Magnitude < 120
-end
-
-local function teleportToLobby()
-    if not canAct() then return end
-    local root = getRoot()
-    local cf = getLobbyCFrame()
-    if root and cf then
-        pcall(function()
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.CFrame = cf
-        end)
-    end
-end
-
-local function doReset()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        pcall(function()
-            hum.Health = 0
-            hum:ChangeState(Enum.HumanoidStateType.Dead)
-            char:BreakJoints()
-        end)
-    end
 end
 
 --============================================================
