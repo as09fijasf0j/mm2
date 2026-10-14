@@ -1,40 +1,49 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- Configuration
-local TELEPORT_OFFSET = 3
-local RETURN_DELAY = 0.25
-local RESET_DELAY = 3
+local RESET_DELAY = 0.45 -- Time spent pinned to target's head before resetting so server replicates position
 local POST_RESET_COOLDOWN = 4
+local FLING_DURATION = 2.5
 local LOBBY_LOCK_ENABLED = false
 local AUTO_PICKUP_ENABLED = false
+local ESP_ENABLED = true
 
--- Selected target
+-- State
 local SelectedTarget = nil
-
--- Saved state
 local chainRunning = false
+local flingRunning = false
 local chainCooldownUntil = 0
-local roleTrackerConn = nil
+local cachedLobbyCF = nil
+
+-- Cached Role Data
+local CurrentMurderer = nil
+local CurrentSheriff = nil
 
 --============================================================
--- GUI
+-- GUI SETUP
 --============================================================
+
+local parentGui = (gethui and gethui()) or LocalPlayer:WaitForChild("PlayerGui")
+if parentGui:FindFirstChild("MM2UtilityGui") then
+    parentGui.MM2UtilityGui:Destroy()
+end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AutoPickupGui"
+ScreenGui.Name = "MM2UtilityGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+ScreenGui.Parent = parentGui
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 180, 0, 200)
-MainFrame.Position = UDim2.new(0, 8, 0.05, 0)
+MainFrame.Size = UDim2.new(0, 195, 0, 266)
+MainFrame.Position = UDim2.new(0, 12, 0.08, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -71,120 +80,105 @@ local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(1, -16, 1, 0)
 TitleLabel.Position = UDim2.new(0, 10, 0, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "MM2 AUTO PICKUP"
+TitleLabel.Text = "MM2 GUN DELIVERY + ESP"
 TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 240)
-TitleLabel.TextSize = 11
+TitleLabel.TextSize = 10
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = TopBar
 
-local LobbyLockButton = Instance.new("TextButton")
-LobbyLockButton.Name = "LobbyLockButton"
-LobbyLockButton.Size = UDim2.new(1, -16, 0, 28)
-LobbyLockButton.Position = UDim2.new(0, 8, 0, 34)
-LobbyLockButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
-LobbyLockButton.BorderSizePixel = 0
-LobbyLockButton.Text = "LOBBY LOCK: OFF"
-LobbyLockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-LobbyLockButton.TextSize = 11
-LobbyLockButton.Font = Enum.Font.GothamBold
-LobbyLockButton.AutoButtonColor = false
-LobbyLockButton.Parent = MainFrame
+local function createButton(name, text, pos, size, color)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Size = size
+    btn.Position = pos
+    btn.BackgroundColor3 = color
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 10
+    btn.Font = Enum.Font.GothamBold
+    btn.AutoButtonColor = false
+    btn.Parent = MainFrame
 
-local LobbyLockCorner = Instance.new("UICorner")
-LobbyLockCorner.CornerRadius = UDim.new(0, 8)
-LobbyLockCorner.Parent = LobbyLockButton
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+    return btn
+end
 
-local ToggleButton = Instance.new("TextButton")
-ToggleButton.Name = "ToggleButton"
-ToggleButton.Size = UDim2.new(1, -16, 0, 28)
-ToggleButton.Position = UDim2.new(0, 8, 0, 66)
-ToggleButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
-ToggleButton.BorderSizePixel = 0
-ToggleButton.Text = "AUTO PICKUP: OFF"
-ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleButton.TextSize = 11
-ToggleButton.Font = Enum.Font.GothamBold
-ToggleButton.AutoButtonColor = false
-ToggleButton.Parent = MainFrame
+local LobbyLockButton = createButton(
+    "LobbyLockButton", "LOBBY LOCK: OFF",
+    UDim2.new(0, 8, 0, 34), UDim2.new(1, -16, 0, 26),
+    Color3.fromRGB(210, 60, 60)
+)
 
-local ToggleCorner = Instance.new("UICorner")
-ToggleCorner.CornerRadius = UDim.new(0, 8)
-ToggleCorner.Parent = ToggleButton
+local ToggleButton = createButton(
+    "ToggleButton", "AUTO GUN TO TARGET: OFF",
+    UDim2.new(0, 8, 0, 64), UDim2.new(1, -16, 0, 26),
+    Color3.fromRGB(210, 60, 60)
+)
+
+local EspButton = createButton(
+    "EspButton", "ESP (M/S/GUN): ON",
+    UDim2.new(0, 8, 0, 94), UDim2.new(1, -16, 0, 26),
+    Color3.fromRGB(60, 200, 100)
+)
 
 local TargetLabel = Instance.new("TextLabel")
 TargetLabel.Size = UDim2.new(1, -16, 0, 12)
-TargetLabel.Position = UDim2.new(0, 8, 0, 100)
+TargetLabel.Position = UDim2.new(0, 8, 0, 125)
 TargetLabel.BackgroundTransparency = 1
-TargetLabel.Text = "TARGET PLAYER"
+TargetLabel.Text = "DELIVERY / TP TARGET"
 TargetLabel.TextColor3 = Color3.fromRGB(160, 160, 180)
 TargetLabel.TextSize = 9
 TargetLabel.Font = Enum.Font.GothamBold
 TargetLabel.TextXAlignment = Enum.TextXAlignment.Left
 TargetLabel.Parent = MainFrame
 
-local SelectButton = Instance.new("TextButton")
-SelectButton.Name = "SelectButton"
-SelectButton.Size = UDim2.new(1, -16, 0, 26)
-SelectButton.Position = UDim2.new(0, 8, 0, 114)
-SelectButton.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-SelectButton.BorderSizePixel = 0
-SelectButton.Text = "SELECT PLAYER..."
-SelectButton.TextColor3 = Color3.fromRGB(200, 200, 220)
-SelectButton.TextSize = 11
+local SelectButton = createButton(
+    "SelectButton", "SELECT PLAYER...",
+    UDim2.new(0, 8, 0, 139), UDim2.new(1, -16, 0, 26),
+    Color3.fromRGB(35, 35, 45)
+)
 SelectButton.Font = Enum.Font.Gotham
-SelectButton.AutoButtonColor = false
-SelectButton.Parent = MainFrame
-
-local SelectCorner = Instance.new("UICorner")
-SelectCorner.CornerRadius = UDim.new(0, 8)
-SelectCorner.Parent = SelectButton
+SelectButton.TextColor3 = Color3.fromRGB(200, 200, 220)
 
 local SelectStroke = Instance.new("UIStroke")
 SelectStroke.Color = Color3.fromRGB(70, 70, 85)
 SelectStroke.Thickness = 1
 SelectStroke.Parent = SelectButton
 
-local TeleportButton = Instance.new("TextButton")
-TeleportButton.Name = "TeleportButton"
-TeleportButton.Size = UDim2.new(0.5, -12, 0, 26)
-TeleportButton.Position = UDim2.new(0, 8, 0, 146)
-TeleportButton.BackgroundColor3 = Color3.fromRGB(70, 120, 200)
-TeleportButton.BorderSizePixel = 0
-TeleportButton.Text = "TELEPORT"
-TeleportButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-TeleportButton.TextSize = 10
-TeleportButton.Font = Enum.Font.GothamBold
-TeleportButton.AutoButtonColor = false
-TeleportButton.Parent = MainFrame
+local TeleportButton = createButton(
+    "TeleportButton", "TP TARGET",
+    UDim2.new(0, 8, 0, 170), UDim2.new(0.5, -10, 0, 26),
+    Color3.fromRGB(70, 120, 200)
+)
 
-local TeleportCorner = Instance.new("UICorner")
-TeleportCorner.CornerRadius = UDim.new(0, 8)
-TeleportCorner.Parent = TeleportButton
+local ResetButton = createButton(
+    "ResetButton", "RESET",
+    UDim2.new(0.5, 2, 0, 170), UDim2.new(0.5, -10, 0, 26),
+    Color3.fromRGB(180, 60, 60)
+)
 
-local ResetButton = Instance.new("TextButton")
-ResetButton.Name = "ResetButton"
-ResetButton.Size = UDim2.new(0.5, -12, 0, 26)
-ResetButton.Position = UDim2.new(0.5, 4, 0, 146)
-ResetButton.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-ResetButton.BorderSizePixel = 0
-ResetButton.Text = "RESET"
-ResetButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ResetButton.TextSize = 10
-ResetButton.Font = Enum.Font.GothamBold
-ResetButton.AutoButtonColor = false
-ResetButton.Parent = MainFrame
+local FlingMurdererButton = createButton(
+    "FlingMurdererButton", "FLING MURD",
+    UDim2.new(0, 8, 0, 201), UDim2.new(0.5, -10, 0, 28),
+    Color3.fromRGB(200, 50, 80)
+)
 
-local ResetCorner = Instance.new("UICorner")
-ResetCorner.CornerRadius = UDim.new(0, 8)
-ResetCorner.Parent = ResetButton
+local FlingSheriffButton = createButton(
+    "FlingSheriffButton", "FLING SHERIFF",
+    UDim2.new(0.5, 2, 0, 201), UDim2.new(0.5, -10, 0, 28),
+    Color3.fromRGB(50, 110, 210)
+)
 
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Name = "StatusLabel"
-StatusLabel.Size = UDim2.new(1, -16, 0, 12)
-StatusLabel.Position = UDim2.new(0, 8, 0, 178)
+StatusLabel.Size = UDim2.new(1, -16, 0, 14)
+StatusLabel.Position = UDim2.new(0, 8, 0, 236)
 StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = ""
+StatusLabel.Text = "Ready"
 StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
 StatusLabel.TextSize = 9
 StatusLabel.Font = Enum.Font.Gotham
@@ -193,8 +187,8 @@ StatusLabel.Parent = MainFrame
 
 local PlayerListFrame = Instance.new("ScrollingFrame")
 PlayerListFrame.Name = "PlayerListFrame"
-PlayerListFrame.Size = UDim2.new(1, -16, 0, 140)
-PlayerListFrame.Position = UDim2.new(0, 8, 0, 114)
+PlayerListFrame.Size = UDim2.new(1, -16, 0, 120)
+PlayerListFrame.Position = UDim2.new(0, 8, 0, 139)
 PlayerListFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 PlayerListFrame.BorderSizePixel = 0
 PlayerListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
@@ -220,8 +214,10 @@ ListLayout.Parent = PlayerListFrame
 
 local function setStatus(msg)
     StatusLabel.Text = msg
-    task.delay(2.5, function()
-        if StatusLabel.Text == msg then StatusLabel.Text = "" end
+    task.delay(3, function()
+        if StatusLabel.Text == msg then
+            StatusLabel.Text = ""
+        end
     end)
 end
 
@@ -241,6 +237,7 @@ local function refreshPlayerList()
             btn.Font = Enum.Font.Gotham
             btn.TextXAlignment = Enum.TextXAlignment.Left
             btn.AutoButtonColor = false
+            btn.ZIndex = 21
             btn.Parent = PlayerListFrame
 
             local bc = Instance.new("UICorner")
@@ -266,13 +263,13 @@ SelectButton.MouseButton1Click:Connect(function()
 end)
 
 --============================================================
--- ROLE TRACKER (bottom right)
+-- ROLE TRACKER HUD (Bottom Right)
 --============================================================
 
 local RoleFrame = Instance.new("Frame")
 RoleFrame.Name = "RoleFrame"
-RoleFrame.Size = UDim2.new(0, 150, 0, 60)
-RoleFrame.Position = UDim2.new(1, -158, 1, -70)
+RoleFrame.Size = UDim2.new(0, 155, 0, 60)
+RoleFrame.Position = UDim2.new(1, -165, 1, -72)
 RoleFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 RoleFrame.BorderSizePixel = 0
 RoleFrame.Parent = ScreenGui
@@ -289,7 +286,7 @@ RoleStroke.Parent = RoleFrame
 local RoleTitle = Instance.new("TextLabel")
 RoleTitle.Size = UDim2.new(1, 0, 0, 18)
 RoleTitle.BackgroundTransparency = 1
-RoleTitle.Text = "ROLES"
+RoleTitle.Text = "MM2 ROLES"
 RoleTitle.TextColor3 = Color3.fromRGB(230, 230, 240)
 RoleTitle.TextSize = 10
 RoleTitle.Font = Enum.Font.GothamBold
@@ -299,7 +296,7 @@ local MurdererLabel = Instance.new("TextLabel")
 MurdererLabel.Size = UDim2.new(1, -12, 0, 16)
 MurdererLabel.Position = UDim2.new(0, 6, 0, 22)
 MurdererLabel.BackgroundTransparency = 1
-MurdererLabel.Text = "M: ..."
+MurdererLabel.Text = "M: None"
 MurdererLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
 MurdererLabel.TextSize = 9
 MurdererLabel.Font = Enum.Font.Gotham
@@ -311,7 +308,7 @@ local SheriffLabel = Instance.new("TextLabel")
 SheriffLabel.Size = UDim2.new(1, -12, 0, 16)
 SheriffLabel.Position = UDim2.new(0, 6, 0, 40)
 SheriffLabel.BackgroundTransparency = 1
-SheriffLabel.Text = "S: ..."
+SheriffLabel.Text = "S: None"
 SheriffLabel.TextColor3 = Color3.fromRGB(100, 150, 255)
 SheriffLabel.TextSize = 9
 SheriffLabel.Font = Enum.Font.Gotham
@@ -320,24 +317,59 @@ SheriffLabel.TextTruncate = Enum.TextTruncate.AtEnd
 SheriffLabel.Parent = RoleFrame
 
 --============================================================
--- DRAG
+-- 3D HIGHLIGHT ESP ENGINE (Murderer, Sheriff, GunDrop)
 --============================================================
 
-local dragging = false
-local dragStart = nil
-local startPos = nil
+local ESPFolder = Instance.new("Folder")
+ESPFolder.Name = "MM2_ESP_Container"
+ESPFolder.Parent = ScreenGui
 
-local function updateDrag(input)
-    local delta = input.Position - dragStart
-    MainFrame.Position = UDim2.new(
-        startPos.X.Scale, startPos.X.Offset + delta.X,
-        startPos.Y.Scale, startPos.Y.Offset + delta.Y
-    )
+local function createHighlight(name, fillColor, outlineColor)
+    local hl = Instance.new("Highlight")
+    hl.Name = name
+    hl.FillColor = fillColor
+    hl.OutlineColor = outlineColor
+    hl.FillTransparency = 0.45
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Enabled = false
+    hl.Parent = ESPFolder
+    return hl
 end
 
+-- Dedicated Highlight instances (prevents Roblox's 31-Highlight limit bug)
+local MurdererHighlight = createHighlight("MurdererESP", Color3.fromRGB(255, 45, 45), Color3.fromRGB(255, 180, 180))
+local SheriffHighlight  = createHighlight("SheriffESP",  Color3.fromRGB(45, 125, 255), Color3.fromRGB(180, 220, 255))
+local GunDropHighlight  = createHighlight("GunDropESP",  Color3.fromRGB(45, 255, 95),  Color3.fromRGB(200, 255, 200))
+
+-- Floating Billboard label for GunDrop so it's easy to spot even when tiny
+local GunBillboard = Instance.new("BillboardGui")
+GunBillboard.Name = "GunDropTag"
+GunBillboard.Size = UDim2.new(0, 110, 0, 26)
+GunBillboard.StudsOffset = Vector3.new(0, 2, 0)
+GunBillboard.AlwaysOnTop = true
+GunBillboard.Enabled = false
+GunBillboard.Parent = ESPFolder
+
+local GunTagLabel = Instance.new("TextLabel")
+GunTagLabel.Size = UDim2.new(1, 0, 1, 0)
+GunTagLabel.BackgroundTransparency = 1
+GunTagLabel.Text = "[ GUN DROP ]"
+GunTagLabel.TextColor3 = Color3.fromRGB(65, 255, 110)
+GunTagLabel.TextStrokeTransparency = 0.15
+GunTagLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+GunTagLabel.Font = Enum.Font.GothamBold
+GunTagLabel.TextSize = 11
+GunTagLabel.Parent = GunBillboard
+
+--============================================================
+-- DRAGGABLE WINDOW
+--============================================================
+
+local dragging, dragStart, startPos = false, nil, nil
+
 TopBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or
-       input.UserInputType == Enum.UserInputType.Touch then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
         startPos = MainFrame.Position
@@ -347,71 +379,170 @@ TopBar.InputBegan:Connect(function(input)
     end
 end)
 
-TopBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or
-       input.UserInputType == Enum.UserInputType.Touch then
-        if dragging then updateDrag(input) end
-    end
-end)
-
 UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or
-                     input.UserInputType == Enum.UserInputType.Touch) then
-        updateDrag(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
 
 --============================================================
--- CORE HELPERS
+-- MM2 CORE & ROLE DETECTION (GetPlayerData + Tool Fallback)
 --============================================================
 
-local function isAlive()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    if not char.Parent then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-    return hum.Health > 0
+local getPlayerDataRemote = nil
+task.spawn(function()
+    getPlayerDataRemote = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
+end)
+
+local function hasTool(plr, toolName)
+    if not plr then return false end
+    local char = plr.Character
+    local bp = plr:FindFirstChildOfClass("Backpack")
+    if char and char:FindFirstChild(toolName) then return true end
+    if bp and bp:FindFirstChild(toolName) then return true end
+    return false
+end
+
+local function findGunDrop()
+    local gunDrop = workspace:FindFirstChild("GunDrop", true)
+    if gunDrop and gunDrop:IsA("BasePart") then
+        return gunDrop
+    end
+    return nil
+end
+
+local function updateESP(gunDropPart)
+    if not ESP_ENABLED then
+        MurdererHighlight.Adornee = nil
+        MurdererHighlight.Enabled = false
+        SheriffHighlight.Adornee = nil
+        SheriffHighlight.Enabled = false
+        GunDropHighlight.Adornee = nil
+        GunDropHighlight.Enabled = false
+        GunBillboard.Adornee = nil
+        GunBillboard.Enabled = false
+        return
+    end
+
+    -- 1. Murderer ESP (Red)
+    local mChar = (CurrentMurderer and CurrentMurderer ~= LocalPlayer) and CurrentMurderer.Character or nil
+    if mChar and mChar:FindFirstChildOfClass("Humanoid") and mChar.Humanoid.Health > 0 then
+        MurdererHighlight.Adornee = mChar
+        MurdererHighlight.Enabled = true
+    else
+        MurdererHighlight.Adornee = nil
+        MurdererHighlight.Enabled = false
+    end
+
+    -- 2. Sheriff / Hero ESP (Blue)
+    local sChar = (CurrentSheriff and CurrentSheriff ~= LocalPlayer) and CurrentSheriff.Character or nil
+    if sChar and sChar:FindFirstChildOfClass("Humanoid") and sChar.Humanoid.Health > 0 then
+        SheriffHighlight.Adornee = sChar
+        SheriffHighlight.Enabled = true
+    else
+        SheriffHighlight.Adornee = nil
+        SheriffHighlight.Enabled = false
+    end
+
+    -- 3. Dropped Gun ESP (Green)
+    if gunDropPart and gunDropPart.Parent then
+        GunDropHighlight.Adornee = gunDropPart
+        GunDropHighlight.Enabled = true
+        GunBillboard.Adornee = gunDropPart
+        GunBillboard.Enabled = true
+    else
+        GunDropHighlight.Adornee = nil
+        GunDropHighlight.Enabled = false
+        GunBillboard.Adornee = nil
+        GunBillboard.Enabled = false
+    end
+end
+
+local function updateRoles()
+    local foundMurderer, foundSheriff = nil, nil
+
+    -- 1. Try MM2's internal GetPlayerData remote first (works before tools are equipped)
+    if not getPlayerDataRemote then
+        getPlayerDataRemote = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
+    end
+
+    if getPlayerDataRemote and getPlayerDataRemote:IsA("RemoteFunction") then
+        local ok, data = pcall(function()
+            return getPlayerDataRemote:InvokeServer()
+        end)
+        if ok and type(data) == "table" then
+            for plrName, info in pairs(data) do
+                if type(info) == "table" and not info.Dead and not info.Killed then
+                    local plr = Players:FindFirstChild(plrName)
+                    if plr then
+                        if info.Role == "Murderer" then
+                            foundMurderer = plr
+                        elseif info.Role == "Sheriff" or info.Role == "Hero" then
+                            foundSheriff = plr
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2. Fallback / Instant Override via Backpack & Character Tools (Knife / Gun)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character and plr.Character:FindFirstChildOfClass("Humanoid") and plr.Character.Humanoid.Health > 0 then
+            if hasTool(plr, "Knife") then
+                foundMurderer = plr
+            elseif hasTool(plr, "Gun") then
+                foundSheriff = plr
+            end
+        end
+    end
+
+    CurrentMurderer = foundMurderer
+    CurrentSheriff = foundSheriff
+
+    MurdererLabel.Text = "M: " .. (foundMurderer and foundMurderer.Name or "None")
+    SheriffLabel.Text = "S: " .. (foundSheriff and foundSheriff.Name or "None")
 end
 
 local function canAct()
-    if not isAlive() then return false end
     local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
+    if not char or not char.Parent then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
     local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return false end
-    if hum.Parent ~= char then return false end
-    return true
-end
-
-local function isOnCooldown()
-    return tick() < chainCooldownUntil
-end
-
-local function startCooldown()
-    chainCooldownUntil = tick() + POST_RESET_COOLDOWN
+    return hum ~= nil and root ~= nil and hum.Health > 0
 end
 
 local function getRoot()
-    local char = LocalPlayer.Character
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
+    return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+end
+
+local function isLocalPlayerSheriff()
+    return hasTool(LocalPlayer, "Gun")
+end
+
+local function isOnCooldown()
+    return os.clock() < chainCooldownUntil
+end
+
+local function startCooldown()
+    chainCooldownUntil = os.clock() + POST_RESET_COOLDOWN
 end
 
 local function getLobbyCFrame()
-    local lobby = workspace:FindFirstChild("RegularLobby")
+    if cachedLobbyCF then return cachedLobbyCF end
+    local lobby = workspace:FindFirstChild("Lobby") or workspace:FindFirstChild("RegularLobby")
     if lobby then
-        local spawn = lobby:FindFirstChildOfClass("SpawnLocation")
-        if spawn then return spawn.CFrame + Vector3.new(0, 5, 0) end
-        local mainLobby = lobby:FindFirstChild("MainLobby")
-        if mainLobby and mainLobby:IsA("Model") and mainLobby.PrimaryPart then
-            return mainLobby.PrimaryPart.CFrame + Vector3.new(0, 5, 0)
+        local spawn = lobby:FindFirstChildOfClass("SpawnLocation", true)
+        if spawn then
+            cachedLobbyCF = spawn.CFrame + Vector3.new(0, 5, 0)
+            return cachedLobbyCF
         end
     end
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("SpawnLocation") then
-            return obj.CFrame + Vector3.new(0, 5, 0)
+            cachedLobbyCF = obj.CFrame + Vector3.new(0, 5, 0)
+            return cachedLobbyCF
         end
     end
     return nil
@@ -420,319 +551,299 @@ end
 local function isInLobby()
     if not canAct() then return true end
     local root = getRoot()
-    if not root then return true end
-    if not workspace:FindFirstChild("RegularLobby") then return true end
     local lobbyCF = getLobbyCFrame()
-    if not lobbyCF then return true end
-    return (root.Position - lobbyCF.Position).Magnitude < 100
+    if not root or not lobbyCF then return true end
+    return (root.Position - lobbyCF.Position).Magnitude < 120
 end
-
-local function findNearestGun()
-    if not canAct() then return nil end
-    local root = getRoot()
-    if not root then return nil end
-    local nearest, shortest = nil, math.huge
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj.Name == "GunDrop" then
-            local d = (obj.Position - root.Position).Magnitude
-            if d < shortest then shortest = d; nearest = obj end
-        end
-    end
-    return nearest
-end
-
-local function getSelectedTargetRoot()
-    if not SelectedTarget then return nil end
-    local char = SelectedTarget.Character
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
-end
-
-local function isLocalPlayerSheriff()
-    local char = LocalPlayer.Character
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-
-    local function checkContainer(container)
-        if not container then return false end
-        for _, tool in ipairs(container:GetChildren()) do
-            if tool:IsA("Tool") then
-                local n = tool.Name:lower()
-                if n:find("gun") and not n:find("drop") then
-                    return true
-                end
-            end
-        end
-        return false
-    end
-
-    if checkContainer(char) then return true end
-    if checkContainer(backpack) then return true end
-    return false
-end
-
--- NEW: Check if a player (by object) is the murderer
-local function isPlayerMurderer(plr)
-    if not plr then return false end
-    local function checkContainer(container)
-        if not container then return false end
-        for _, tool in ipairs(container:GetChildren()) do
-            if tool:IsA("Tool") then
-                local n = tool.Name:lower()
-                if n:find("knife") then return true end
-            end
-        end
-        return false
-    end
-    if checkContainer(plr.Character) then return true end
-    return checkContainer(plr:FindFirstChildOfClass("Backpack"))
-end
-
-local function pickupGun(gunPart)
-    if not gunPart or not gunPart.Parent then return end
-    local prompt = gunPart:FindFirstChildOfClass("ProximityPrompt")
-        or (gunPart.Parent and gunPart.Parent:FindFirstChildOfClass("ProximityPrompt"))
-    if prompt then pcall(function() fireproximityprompt(prompt) end) return end
-    local cd = gunPart:FindFirstChildOfClass("ClickDetector")
-        or (gunPart.Parent and gunPart.Parent:FindFirstChildOfClass("ClickDetector"))
-    if cd then pcall(function() fireclickdetector(cd) end) return end
-    local root = getRoot()
-    if root then
-        pcall(function()
-            firetouchinterest(root, gunPart, 0)
-            task.wait(0.05)
-            firetouchinterest(root, gunPart, 1)
-        end)
-    end
-end
-
---============================================================
--- TELEPORT CHAIN
---============================================================
 
 local function teleportToLobby()
     if not canAct() then return end
     local root = getRoot()
-    if not root then return end
     local cf = getLobbyCFrame()
-    if cf then pcall(function() root.CFrame = cf end) end
+    if root and cf then
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.CFrame = cf
+        end)
+    end
 end
 
 local function doReset()
-    if not canAct() then return end
     local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
-        pcall(function() hum.Health = 0 end)
+        pcall(function()
+            hum.Health = 0
+            hum:ChangeState(Enum.HumanoidStateType.Dead)
+            char:BreakJoints()
+        end)
     end
 end
 
-local function runSheriffChain()
-    if isOnCooldown() then chainRunning = false return end
-    if not canAct() then chainRunning = false return end
+--============================================================
+-- SKIDFLING ENGINE (Fling Murderer / Fling Sheriff)
+--============================================================
 
-    setStatus("Sheriff: teleporting to target...")
-
-    local targetHRP = getSelectedTargetRoot()
-    if not targetHRP then
-        setStatus("No target selected")
-        chainRunning = false
+local function flingPlayer(targetPlr, roleLabel)
+    if flingRunning or chainRunning then
+        setStatus("Busy with another action!")
+        return
+    end
+    if not targetPlr or not targetPlr.Character then
+        setStatus("No valid " .. roleLabel .. " found!")
+        return
+    end
+    if targetPlr == LocalPlayer then
+        setStatus("You are the " .. roleLabel .. "!")
+        return
+    end
+    if not canAct() then
+        setStatus("You are dead!")
         return
     end
 
+    local char = LocalPlayer.Character
+    local hum = char:FindFirstChildOfClass("Humanoid")
     local root = getRoot()
-    if root then
-        pcall(function()
-            root.CFrame = targetHRP.CFrame + Vector3.new(0, 3, 0)
-        end)
+
+    local tChar = targetPlr.Character
+    local tHum = tChar:FindFirstChildOfClass("Humanoid")
+    local tRoot = tChar:FindFirstChild("HumanoidRootPart") or tChar:FindFirstChild("Torso") or tChar:FindFirstChild("UpperTorso")
+
+    if not tRoot or not tHum or tHum.Health <= 0 then
+        setStatus(roleLabel .. " is already dead!")
+        return
     end
 
-    task.wait(RETURN_DELAY)
+    flingRunning = true
+    setStatus("Flinging " .. targetPlr.Name .. "...")
 
-    if not canAct() then chainRunning = false return end
+    local oldCFrame = root.CFrame
+    local oldDestroyHeight = workspace.FallenPartsDestroyHeight
+    workspace.FallenPartsDestroyHeight = 0 / 0
 
-    setStatus("Resetting in " .. RESET_DELAY .. "s...")
-    task.wait(RESET_DELAY)
+    local noclipConn = RunService.Stepped:Connect(function()
+        if LocalPlayer.Character then
+            for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end)
+
+    local startTime = os.clock()
+    local angle = 0
+
+    while os.clock() - startTime < FLING_DURATION do
+        if not canAct() or not tChar.Parent or not tRoot.Parent or tHum.Health <= 0 then
+            break
+        end
+        if tRoot.Velocity.Magnitude > 450 then
+            break
+        end
+
+        angle = angle + 100
+        local moveOffset = tHum.MoveDirection * (tRoot.Velocity.Magnitude / 1.25)
+        local targetCF = CFrame.new(tRoot.Position + moveOffset) * CFrame.Angles(math.rad(angle), math.rad(angle), 0)
+
+        pcall(function()
+            hum.Sit = false
+            root.CFrame = targetCF
+            root.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
+            root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+        end)
+        RunService.Heartbeat:Wait()
+
+        pcall(function()
+            root.CFrame = CFrame.new(tRoot.Position) * CFrame.new(0, -1.5, 0) * CFrame.Angles(math.rad(angle), 0, 0)
+            root.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
+            root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+        end)
+        RunService.RenderStepped:Wait()
+    end
+
+    if noclipConn then noclipConn:Disconnect() end
+
+    if canAct() and root then
+        for _ = 1, 8 do
+            pcall(function()
+                root.CFrame = oldCFrame
+                root.Velocity = Vector3.zero
+                root.RotVelocity = Vector3.zero
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+            RunService.Heartbeat:Wait()
+        end
+    end
+
+    workspace.FallenPartsDestroyHeight = oldDestroyHeight
+    flingRunning = false
+    setStatus("Finished flinging " .. targetPlr.Name)
+end
+
+--============================================================
+-- GUN PICKUP -> TELEPORT TO TARGET HEAD -> RESET
+--============================================================
+
+local function resetOnTargetHead(targetPlr)
+    if not targetPlr or not targetPlr.Character then
+        setStatus("No valid target!")
+        return
+    end
+
+    local tChar = targetPlr.Character
+    local tHead = tChar:FindFirstChild("Head") or tChar:FindFirstChild("HumanoidRootPart")
+    if not tHead then return end
+
+    setStatus("Pinning to " .. targetPlr.Name .. "'s head...")
+
+    local pinStart = os.clock()
+    while os.clock() - pinStart < RESET_DELAY do
+        if not canAct() or not tChar.Parent or not tHead.Parent then break end
+        local root = getRoot()
+        if root then
+            pcall(function()
+                root.Velocity = Vector3.zero
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.CFrame = tHead.CFrame * CFrame.new(0, 1.8, 0)
+            end)
+        end
+        RunService.Heartbeat:Wait()
+    end
 
     if canAct() then
         startCooldown()
         doReset()
+        local postStart = os.clock()
+        while os.clock() - postStart < 0.25 and LocalPlayer.Character do
+            local root = getRoot()
+            if root and tHead and tHead.Parent then
+                pcall(function()
+                    root.CFrame = tHead.CFrame * CFrame.new(0, 1.8, 0)
+                end)
+            end
+            RunService.Heartbeat:Wait()
+        end
     end
-
-    chainRunning = false
 end
 
-local function runChain(gunPart)
-    if isOnCooldown() then chainRunning = false return end
-    if not canAct() then chainRunning = false return end
-
-    local root = getRoot()
-    if not root then chainRunning = false return end
-
-    -- Decide behavior based on whether selected target is the murderer
-    local targetIsMurderer = SelectedTarget and isPlayerMurderer(SelectedTarget)
-
-    setStatus("Chain: teleporting to gun...")
-
-    if gunPart and gunPart.Parent and canAct() then
-        pcall(function()
-            root.CFrame = CFrame.new(gunPart.Position + Vector3.new(0, TELEPORT_OFFSET, 0))
-        end)
-        task.wait(RETURN_DELAY)
-        if canAct() then
-            pickupGun(gunPart)
-        end
-        task.wait(RETURN_DELAY)
+local function runGunDeliveryChain(gunPart)
+    if isOnCooldown() or not canAct() or flingRunning then
+        chainRunning = false
+        return
     end
 
-    if not canAct() then chainRunning = false return end
+    if not isLocalPlayerSheriff() and gunPart and gunPart.Parent then
+        setStatus("Grabbing dropped gun...")
+        local grabStart = os.clock()
 
-    -- Always return to lobby after grabbing the gun
-    teleportToLobby()
-    task.wait(RETURN_DELAY)
+        while os.clock() - grabStart < 1.2 do
+            if not canAct() or isLocalPlayerSheriff() or not gunPart.Parent then
+                break
+            end
+            local root = getRoot()
+            if root then
+                pcall(function()
+                    root.Velocity = Vector3.zero
+                    root.CFrame = gunPart.CFrame
+                    if firetouchinterest then
+                        firetouchinterest(root, gunPart, 0)
+                        firetouchinterest(root, gunPart, 1)
+                    end
+                end)
+            end
+            RunService.Heartbeat:Wait()
+        end
+    end
 
-    if not canAct() then chainRunning = false return end
+    if not canAct() then
+        chainRunning = false
+        return
+    end
 
-    -- MURDERER MODE: stay in the lobby, don't teleport to target
-    if targetIsMurderer then
-        setStatus("Murderer target: staying in lobby...")
-        -- Re-snap to lobby a few times so the server agrees we're parked here
-        for i = 1, 10 do
+    if not isLocalPlayerSheriff() then
+        if LOBBY_LOCK_ENABLED then teleportToLobby() end
+        chainRunning = false
+        return
+    end
+
+    if SelectedTarget and SelectedTarget == CurrentMurderer then
+        setStatus("Target is Murderer! Resetting in lobby...")
+        for _ = 1, 15 do
             if not canAct() then break end
             teleportToLobby()
-            task.wait(0.05)
+            RunService.Heartbeat:Wait()
         end
-
-        setStatus("Resetting in lobby in " .. RESET_DELAY .. "s...")
-        task.wait(RESET_DELAY)
-
-        if canAct() then
-            startCooldown()
-            doReset()
-        end
-
+        startCooldown()
+        doReset()
         chainRunning = false
         return
     end
 
-    -- NORMAL MODE: teleport to target
-    local targetHRP = getSelectedTargetRoot()
-    if targetHRP and canAct() then
-        setStatus("Chain: teleporting to target...")
-        pcall(function()
-            root.CFrame = targetHRP.CFrame + Vector3.new(0, 3, 0)
-        end)
-        task.wait(RETURN_DELAY)
-    end
-
-    if not canAct() then chainRunning = false return end
-
-    setStatus("Resetting in " .. RESET_DELAY .. "s...")
-    task.wait(RESET_DELAY)
-
-    if canAct() then
-        startCooldown()
-        doReset()
+    if SelectedTarget and SelectedTarget.Character then
+        resetOnTargetHead(SelectedTarget)
+    else
+        setStatus("Gun grabbed (No target selected)")
+        if LOBBY_LOCK_ENABLED then teleportToLobby() end
     end
 
     chainRunning = false
 end
 
 --============================================================
--- LOBBY LOCK / AUTO PICKUP
+-- MAIN BACKGROUND LOOP
 --============================================================
 
-local lobbyConn = nil
-local pickupConn = nil
+local lastRoleScan = 0
 
-local function startLobbyLock()
-    if lobbyConn then return end
-    lobbyConn = RunService.Heartbeat:Connect(function()
-        if not LOBBY_LOCK_ENABLED then return end
-        if chainRunning then return end
-        if isOnCooldown() then return end
-        if not canAct() then return end
-        if not isInLobby() then teleportToLobby() end
-    end)
-end
+RunService.Heartbeat:Connect(function()
+    local now = os.clock()
 
-local function stopLobbyLock()
-    if lobbyConn then lobbyConn:Disconnect() lobbyConn = nil end
-end
+    -- Scan roles & update 3D ESP every 0.3s
+    if now - lastRoleScan >= 0.3 then
+        lastRoleScan = now
+        local gunDrop = findGunDrop()
+        updateESP(gunDrop)
+        task.spawn(updateRoles)
+    end
 
-local function startAutoPickup()
-    if pickupConn then return end
-    pickupConn = RunService.Heartbeat:Connect(function()
-        if not AUTO_PICKUP_ENABLED then return end
-        if chainRunning then return end
-        if isOnCooldown() then return end
-        if not canAct() then return end
+    if chainRunning or flingRunning or isOnCooldown() or not canAct() then
+        return
+    end
 
+    -- Lobby Lock
+    if LOBBY_LOCK_ENABLED and not isInLobby() then
+        teleportToLobby()
+    end
+
+    -- Auto Pickup & Head Reset Delivery
+    if AUTO_PICKUP_ENABLED then
         if isLocalPlayerSheriff() then
-            if SelectedTarget then
+            if SelectedTarget and SelectedTarget.Character then
                 chainRunning = true
-                task.spawn(function() runSheriffChain() end)
+                task.spawn(function()
+                    runGunDeliveryChain(nil)
+                end)
             end
             return
         end
 
-        local gun = findNearestGun()
-        if gun then
+        local gunDrop = findGunDrop()
+        if gunDrop then
             chainRunning = true
-            task.spawn(function() runChain(gun) end)
-        end
-    end)
-end
-
-local function stopAutoPickup()
-    if pickupConn then pickupConn:Disconnect() pickupConn = nil end
-end
-
---============================================================
--- ROLE DETECTION
---============================================================
-
-local function checkPlayerForRole(plr, roleName)
-    local function checkContainer(container)
-        if not container then return false end
-        for _, tool in ipairs(container:GetChildren()) do
-            if tool:IsA("Tool") then
-                local n = tool.Name:lower()
-                if roleName == "murderer" and n:find("knife") then return true end
-                if roleName == "sheriff" and n:find("gun") and not n:find("drop") then
-                    return true
-                end
-            end
-        end
-        return false
-    end
-    if checkContainer(plr.Character) then return true end
-    return checkContainer(plr:FindFirstChildOfClass("Backpack"))
-end
-
-local function updateRoleTracker()
-    local mName, sName = "None", "None"
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            if checkPlayerForRole(plr, "murderer") then
-                mName = plr.Name
-            elseif checkPlayerForRole(plr, "sheriff") then
-                sName = plr.Name
-            end
+            task.spawn(function()
+                runGunDeliveryChain(gunDrop)
+            end)
         end
     end
-    MurdererLabel.Text = "M: " .. mName
-    SheriffLabel.Text = "S: " .. sName
-end
-
-local function startRoleTracker()
-    if roleTrackerConn then return end
-    roleTrackerConn = RunService.Heartbeat:Connect(function()
-        pcall(updateRoleTracker)
-    end)
-end
+end)
 
 --============================================================
--- BUTTON HANDLERS
+-- BUTTON CONNECTIONS
 --============================================================
 
 LobbyLockButton.MouseButton1Click:Connect(function()
@@ -740,12 +851,10 @@ LobbyLockButton.MouseButton1Click:Connect(function()
     if LOBBY_LOCK_ENABLED then
         LobbyLockButton.Text = "LOBBY LOCK: ON"
         LobbyLockButton.BackgroundColor3 = Color3.fromRGB(60, 200, 100)
-        startLobbyLock()
         setStatus("Lobby lock enabled")
     else
         LobbyLockButton.Text = "LOBBY LOCK: OFF"
         LobbyLockButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
-        stopLobbyLock()
         setStatus("Lobby lock disabled")
     end
 end)
@@ -753,56 +862,79 @@ end)
 ToggleButton.MouseButton1Click:Connect(function()
     AUTO_PICKUP_ENABLED = not AUTO_PICKUP_ENABLED
     if AUTO_PICKUP_ENABLED then
-        ToggleButton.Text = "AUTO PICKUP: ON"
+        ToggleButton.Text = "AUTO GUN TO TARGET: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(60, 200, 100)
-        startAutoPickup()
-        setStatus("Auto pickup enabled")
+        setStatus("Auto gun delivery enabled")
     else
-        ToggleButton.Text = "AUTO PICKUP: OFF"
+        ToggleButton.Text = "AUTO GUN TO TARGET: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
-        stopAutoPickup()
-        setStatus("Auto pickup disabled")
+        setStatus("Auto gun delivery disabled")
     end
 end)
 
+EspButton.MouseButton1Click:Connect(function()
+    ESP_ENABLED = not ESP_ENABLED
+    if ESP_ENABLED then
+        EspButton.Text = "ESP (M/S/GUN): ON"
+        EspButton.BackgroundColor3 = Color3.fromRGB(60, 200, 100)
+        setStatus("3D Highlight ESP enabled")
+    else
+        EspButton.Text = "ESP (M/S/GUN): OFF"
+        EspButton.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
+        setStatus("3D Highlight ESP disabled")
+    end
+    updateESP(findGunDrop())
+end)
+
 TeleportButton.MouseButton1Click:Connect(function()
-    if not SelectedTarget then
-        setStatus("Select a player first")
+    if not SelectedTarget or not SelectedTarget.Character then
+        setStatus("Select a valid player first")
         return
     end
-    local hrp = getSelectedTargetRoot()
-    if not hrp then
-        setStatus(SelectedTarget.Name .. " has no character")
-        return
-    end
-    if not canAct() then
-        setStatus("You are dead")
-        return
-    end
+    local tRoot = SelectedTarget.Character:FindFirstChild("HumanoidRootPart")
     local root = getRoot()
-    if not root then
-        setStatus("You have no character")
-        return
+    if tRoot and root and canAct() then
+        pcall(function()
+            root.CFrame = tRoot.CFrame * CFrame.new(0, 3, 0)
+        end)
+        setStatus("Teleported to " .. SelectedTarget.Name)
     end
-    pcall(function()
-        root.CFrame = hrp.CFrame + Vector3.new(0, 3, 0)
-    end)
-    setStatus("Teleported to " .. SelectedTarget.Name)
 end)
 
 ResetButton.MouseButton1Click:Connect(function()
     if not canAct() then
-        setStatus("You are already dead")
+        setStatus("Already dead")
         return
     end
-    doReset()
-    startCooldown()
-    setStatus("Resetting...")
+    if SelectedTarget and SelectedTarget.Character and isLocalPlayerSheriff() then
+        task.spawn(function()
+            resetOnTargetHead(SelectedTarget)
+        end)
+    else
+        startCooldown()
+        doReset()
+        setStatus("Resetting...")
+    end
+end)
+
+FlingMurdererButton.MouseButton1Click:Connect(function()
+    updateRoles()
+    task.spawn(function()
+        flingPlayer(CurrentMurderer, "Murderer")
+    end)
+end)
+
+FlingSheriffButton.MouseButton1Click:Connect(function()
+    updateRoles()
+    task.spawn(function()
+        flingPlayer(CurrentSheriff, "Sheriff")
+    end)
 end)
 
 Players.PlayerAdded:Connect(function()
     if PlayerListFrame.Visible then refreshPlayerList() end
 end)
+
 Players.PlayerRemoving:Connect(function(plr)
     if SelectedTarget == plr then
         SelectedTarget = nil
@@ -814,8 +946,9 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function()
     chainRunning = false
+    flingRunning = false
     if LOBBY_LOCK_ENABLED then
-        task.wait(1)
+        task.wait(0.8)
         if canAct() then teleportToLobby() end
     end
 end)
@@ -825,6 +958,4 @@ LocalPlayer.CharacterRemoving:Connect(function()
     startCooldown()
 end)
 
-startRoleTracker()
-
-print("MM2 Auto Pickup + Murderer Lobby-Hold Loaded!")
+print("MM2 Gun Delivery + SkidFling + 3D ESP Loaded!")
