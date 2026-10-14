@@ -1,7 +1,3 @@
--- MM2 Auto Pickup + Role Tracker + Player Dropdown (Custom GUI)
--- Smaller mobile-friendly layout + role tracker bottom-right
--- Murderer target: grab gun, stay in lobby, reset (gun stuck in lobby)
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
