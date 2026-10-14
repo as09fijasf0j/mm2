@@ -23,6 +23,7 @@ local cachedLobbyCF = nil
 -- Cached Role Data
 local CurrentMurderer = nil
 local CurrentSheriff = nil
+local IsAliveInRound = false
 
 --============================================================
 -- GUI SETUP
@@ -461,6 +462,7 @@ end
 
 local function updateRoles()
     local foundMurderer, foundSheriff = nil, nil
+    local localAlive = false
 
     -- 1. Try MM2's internal GetPlayerData remote first (works before tools are equipped)
     if not getPlayerDataRemote then
@@ -472,6 +474,10 @@ local function updateRoles()
             return getPlayerDataRemote:InvokeServer()
         end)
         if ok and type(data) == "table" then
+            local myInfo = data[LocalPlayer.Name]
+            if type(myInfo) == "table" and not myInfo.Dead and not myInfo.Killed and myInfo.Role ~= nil then
+                localAlive = true
+            end
             for plrName, info in pairs(data) do
                 if type(info) == "table" and not info.Dead and not info.Killed then
                     local plr = Players:FindFirstChild(plrName)
@@ -498,8 +504,13 @@ local function updateRoles()
         end
     end
 
+    if not localAlive and canAct() and not isInLobby() then
+        localAlive = true
+    end
+
     CurrentMurderer = foundMurderer
     CurrentSheriff = foundSheriff
+    IsAliveInRound = localAlive
 
     MurdererLabel.Text = "M: " .. (foundMurderer and foundMurderer.Name or "None")
     SheriffLabel.Text = "S: " .. (foundSheriff and foundSheriff.Name or "None")
@@ -822,6 +833,9 @@ RunService.Heartbeat:Connect(function()
 
     -- Auto Pickup & Head Reset Delivery
     if AUTO_PICKUP_ENABLED then
+        if not IsAliveInRound or isInLobby() then
+            return
+        end
         if isLocalPlayerSheriff() then
             if SelectedTarget and SelectedTarget.Character then
                 chainRunning = true
@@ -955,6 +969,7 @@ end)
 
 LocalPlayer.CharacterRemoving:Connect(function()
     chainRunning = false
+    IsAliveInRound = false
     startCooldown()
 end)
 
