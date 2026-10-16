@@ -7,7 +7,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- Configuration
-local RESET_DELAY = 0.55 -- Time spent pinned to target's head before resetting so server replicates position
+local RESET_DELAY = 0.55
 local POST_RESET_COOLDOWN = 4
 local FLING_DURATION = 2.0
 local LOBBY_LOCK_ENABLED = false
@@ -20,6 +20,11 @@ local chainRunning = false
 local flingRunning = false
 local chainCooldownUntil = 0
 local cachedLobbyCF = nil
+
+-- Spectate state
+local spectating = false
+local spectateTarget = nil
+local defaultCameraSubject = nil
 
 getgenv().OldPos = nil
 getgenv().FPDH = workspace.FallenPartsDestroyHeight
@@ -47,8 +52,8 @@ ScreenGui.Parent = parentGui
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 195, 0, 266)
-MainFrame.Position = UDim2.new(0, 12, 0.08, 0)
+MainFrame.Size = UDim2.new(0, 195, 0, 326)
+MainFrame.Position = UDim2.new(0, 12, 0.05, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -168,20 +173,33 @@ local ResetButton = createButton(
 
 local FlingMurdererButton = createButton(
     "FlingMurdererButton", "FLING MURD",
-    UDim2.new(0, 8, 0, 201), UDim2.new(0.5, -10, 0, 28),
+    UDim2.new(0, 8, 0, 201), UDim2.new(0.5, -10, 0, 26),
     Color3.fromRGB(200, 50, 80)
 )
 
 local FlingSheriffButton = createButton(
     "FlingSheriffButton", "FLING SHERIFF",
-    UDim2.new(0.5, 2, 0, 201), UDim2.new(0.5, -10, 0, 28),
+    UDim2.new(0.5, 2, 0, 201), UDim2.new(0.5, -10, 0, 26),
     Color3.fromRGB(50, 110, 210)
+)
+
+-- NEW: Spectate buttons
+local SpectateMurdererButton = createButton(
+    "SpectateMurdererButton", "SPECTATE MURD",
+    UDim2.new(0, 8, 0, 232), UDim2.new(0.5, -10, 0, 26),
+    Color3.fromRGB(120, 60, 140)
+)
+
+local SpectateSheriffButton = createButton(
+    "SpectateSheriffButton", "SPECTATE SHERIFF",
+    UDim2.new(0.5, 2, 0, 232), UDim2.new(0.5, -10, 0, 26),
+    Color3.fromRGB(60, 100, 140)
 )
 
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Name = "StatusLabel"
 StatusLabel.Size = UDim2.new(1, -16, 0, 14)
-StatusLabel.Position = UDim2.new(0, 8, 0, 236)
+StatusLabel.Position = UDim2.new(0, 8, 0, 266)
 StatusLabel.BackgroundTransparency = 1
 StatusLabel.Text = "Ready"
 StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
@@ -322,7 +340,7 @@ SheriffLabel.TextTruncate = Enum.TextTruncate.AtEnd
 SheriffLabel.Parent = RoleFrame
 
 --============================================================
--- 3D HIGHLIGHT ESP ENGINE (Murderer, Sheriff, GunDrop)
+-- 3D HIGHLIGHT ESP ENGINE
 --============================================================
 
 local function createHighlight(name, fillColor, outlineColor)
@@ -595,7 +613,52 @@ local function updateRoles()
 end
 
 --============================================================
--- WORKING SKIDFLING ENGINE (from zqyDSUWX)
+-- SPECTATE SYSTEM
+--============================================================
+
+local function startSpectating(targetPlr, labelName)
+    if not targetPlr or not targetPlr.Character then
+        setStatus("No " .. labelName .. " to spectate")
+        return
+    end
+    if targetPlr == LocalPlayer then
+        setStatus("You ARE the " .. labelName)
+        return
+    end
+    local tChar = targetPlr.Character
+    local tHum = tChar:FindFirstChildOfClass("Humanoid")
+    local tHead = tChar:FindFirstChild("Head")
+    if not tHum and not tHead then
+        setStatus(labelName .. " has no head/humanoid")
+        return
+    end
+
+    -- Save current camera subject the first time
+    if not defaultCameraSubject then
+        defaultCameraSubject = workspace.CurrentCamera.CameraSubject
+    end
+
+    spectating = true
+    spectateTarget = targetPlr
+    workspace.CurrentCamera.CameraSubject = tHead or tHum
+
+    setStatus("Spectating " .. targetPlr.Name)
+end
+
+local function stopSpectating()
+    if not spectating then return end
+    spectating = false
+    spectateTarget = nil
+
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    workspace.CurrentCamera.CameraSubject = hum or defaultCameraSubject
+
+    setStatus("Stopped spectating")
+end
+
+--============================================================
+-- WORKING SKIDFLING ENGINE
 --============================================================
 
 local function flingPlayer(TargetPlayer, roleLabel)
@@ -770,7 +833,7 @@ local function flingPlayer(TargetPlayer, roleLabel)
 end
 
 --============================================================
--- GUN PICKUP -> TELEPORT TO TARGET HEAD -> RESET
+-- GUN DELIVERY CHAIN
 --============================================================
 
 local function resetOnTargetHead(targetPlr)
@@ -839,7 +902,7 @@ local function runGunDeliveryChain(gunPart)
     local root = getRoot()
     local oldSafeCF = root and root.CFrame or nil
 
-    -- Step 1: Grab the dropped gun if we don't already have it
+    -- Step 1: Grab dropped gun
     if not isLocalPlayerSheriff() and gunPart and gunPart.Parent then
         setStatus("Grabbing dropped gun...")
         local grabStart = os.clock()
@@ -853,7 +916,6 @@ local function runGunDeliveryChain(gunPart)
             local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
             if root then
                 step = step + 1
-                -- Micro-oscillate height & position on GunDrop so server physics registers touch
                 local yOffset = (step % 2 == 0) and 0.2 or -0.5
                 local xOffset = (step % 4 < 2) and 0.15 or -0.15
                 pcall(function()
@@ -873,7 +935,7 @@ local function runGunDeliveryChain(gunPart)
         return
     end
 
-    -- Step 2: Check if we successfully became Sheriff/Hero
+    -- Step 2: Did we get the gun?
     if not isLocalPlayerSheriff() then
         setStatus("Could not grab gun (taken or out of round)")
         if LOBBY_LOCK_ENABLED then
@@ -885,20 +947,19 @@ local function runGunDeliveryChain(gunPart)
         return
     end
 
-    -- Step 3: Deliver to Target (or Lobby Reset if Target is Murderer)
+    -- Step 3: Target is murderer -> STAY IN LOBBY, DON'T RESET (gun stays with you)
     if SelectedTarget and SelectedTarget == CurrentMurderer then
-        setStatus("Target is Murderer! Resetting in lobby...")
-        for _ = 1, 15 do
-            if not canAct() then break end
+        setStatus("Target is Murderer! Holding gun in lobby...")
+        -- Just stay in the lobby, no reset. Gun stays with you, denied to everyone else.
+        while canAct() and isLocalPlayerSheriff() and not isOnCooldown() do
             teleportToLobby()
             RunService.Heartbeat:Wait()
         end
-        startCooldown()
-        doReset()
         chainRunning = false
         return
     end
 
+    -- Step 4: Deliver to target
     if SelectedTarget and SelectedTarget.Character then
         resetOnTargetHead(SelectedTarget)
     else
@@ -933,7 +994,6 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    -- Auto Pickup & Head Reset Delivery runs BEFORE Lobby Lock so it can leave the lobby to grab the gun
     if AUTO_PICKUP_ENABLED and not isLocalPlayerMurderer() then
         if isLocalPlayerSheriff() then
             if SelectedTarget and SelectedTarget.Character then
@@ -955,7 +1015,6 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Lobby Lock (only holds you in lobby when not actively grabbing/delivering gun)
     if LOBBY_LOCK_ENABLED and not isInLobby() then
         teleportToLobby()
     end
@@ -1050,6 +1109,48 @@ FlingSheriffButton.MouseButton1Click:Connect(function()
     end)
 end)
 
+-- NEW: Spectate buttons (toggle on/off)
+SpectateMurdererButton.MouseButton1Click:Connect(function()
+    -- If already spectating murderer, stop
+    if spectating and spectateTarget == CurrentMurderer then
+        stopSpectating()
+        SpectateMurdererButton.Text = "SPECTATE MURD"
+        SpectateMurdererButton.BackgroundColor3 = Color3.fromRGB(120, 60, 140)
+        return
+    end
+    -- Refresh roles first
+    updateRoles()
+    if not CurrentMurderer then
+        setStatus("No murderer found")
+        return
+    end
+    startSpectating(CurrentMurderer, "murderer")
+    SpectateMurdererButton.Text = "STOP SPECTATE M"
+    SpectateMurdererButton.BackgroundColor3 = Color3.fromRGB(220, 80, 80)
+    SpectateSheriffButton.Text = "SPECTATE SHERIFF"
+    SpectateSheriffButton.BackgroundColor3 = Color3.fromRGB(60, 100, 140)
+end)
+
+SpectateSheriffButton.MouseButton1Click:Connect(function()
+    -- If already spectating sheriff, stop
+    if spectating and spectateTarget == CurrentSheriff then
+        stopSpectating()
+        SpectateSheriffButton.Text = "SPECTATE SHERIFF"
+        SpectateSheriffButton.BackgroundColor3 = Color3.fromRGB(60, 100, 140)
+        return
+    end
+    updateRoles()
+    if not CurrentSheriff then
+        setStatus("No sheriff found")
+        return
+    end
+    startSpectating(CurrentSheriff, "sheriff")
+    SpectateSheriffButton.Text = "STOP SPECTATE S"
+    SpectateSheriffButton.BackgroundColor3 = Color3.fromRGB(220, 80, 80)
+    SpectateMurdererButton.Text = "SPECTATE MURD"
+    SpectateMurdererButton.BackgroundColor3 = Color3.fromRGB(120, 60, 140)
+end)
+
 Players.PlayerAdded:Connect(function()
     if PlayerListFrame.Visible then refreshPlayerList() end
 end)
@@ -1060,12 +1161,28 @@ Players.PlayerRemoving:Connect(function(plr)
         SelectButton.Text = "SELECT PLAYER..."
         SelectButton.TextColor3 = Color3.fromRGB(200, 200, 220)
     end
+    if spectateTarget == plr then
+        stopSpectating()
+        SpectateMurdererButton.Text = "SPECTATE MURD"
+        SpectateMurdererButton.BackgroundColor3 = Color3.fromRGB(120, 60, 140)
+        SpectateSheriffButton.Text = "SPECTATE SHERIFF"
+        SpectateSheriffButton.BackgroundColor3 = Color3.fromRGB(60, 100, 140)
+    end
     if PlayerListFrame.Visible then refreshPlayerList() end
 end)
 
 LocalPlayer.CharacterAdded:Connect(function()
     chainRunning = false
     flingRunning = false
+    -- Re-apply spectate after respawn if still active
+    if spectating and spectateTarget and spectateTarget.Character then
+        local tChar = spectateTarget.Character
+        local tHead = tChar:FindFirstChild("Head")
+        local tHum = tChar:FindFirstChildOfClass("Humanoid")
+        if tHead or tHum then
+            workspace.CurrentCamera.CameraSubject = tHead or tHum
+        end
+    end
     if LOBBY_LOCK_ENABLED then
         task.wait(0.8)
         if canAct() then teleportToLobby() end
@@ -1078,4 +1195,4 @@ LocalPlayer.CharacterRemoving:Connect(function()
     startCooldown()
 end)
 
-print("MM2 Gun Delivery + SkidFling + 3D ESP v3 Loaded!")
+print("MM2 Gun Delivery + SkidFling + 3D ESP + Spectate v4 Loaded!")
