@@ -13,13 +13,16 @@ local visitedPositions = {}
 local isActive = false
 local flySpeed = 15
 local collected = 0
+local roundCollected = 0   -- NEW: resets every round
 local startTime = 0
 local antiAFK = false
+local ROUND_CAP = 50       -- NEW: change if the cap isn't 50
 
 player.CharacterAdded:Connect(function(char)
 	character = char
 	rootPart = char:WaitForChild("HumanoidRootPart")
 	visitedPositions = {}
+	roundCollected = 0   -- NEW: reset round counter on respawn
 end)
 
 -- SOUND
@@ -131,15 +134,16 @@ end
 local toggleBtn = makeButton(58, "🎃 Auto Farm: OFF")
 local afkBtn = makeButton(96, "🕯 Anti-AFK: OFF")
 local speedBtn = makeButton(134, "🦇 Tween Speed: 15")
-local counterLabel = makeLabel(172, "Collected: 0")
+local counterLabel = makeLabel(172, "Collected: 0 (Round: 0/50)")
 local timerLabel = makeLabel(195, "Time Active: 0s")
 local rateLabel = makeLabel(218, "Est. Coins/Hour: 0")
 local resetBtn = makeButton(245, "🔄 Reset Counter")
 
 resetBtn.MouseButton1Click:Connect(function()
 	collected = 0
+	roundCollected = 0   -- NEW: also reset round counter
 	startTime = tick()
-	counterLabel.Text = "Collected: 0"
+	counterLabel.Text = "Collected: 0 (Round: 0/" .. ROUND_CAP .. ")"
 	timerLabel.Text = "Time Active: 0s"
 	rateLabel.Text = "Est. Coins/Hour: 0"
 end)
@@ -181,6 +185,7 @@ toggleBtn.MouseButton1Click:Connect(function()
 
 	if isActive then
 		collected = 0
+		roundCollected = 0   -- NEW: fresh round count on start
 		startTime = tick()
 		visitedPositions = {}
 
@@ -214,8 +219,20 @@ toggleBtn.MouseButton1Click:Connect(function()
 						if closest.Parent then
 							visitedPositions[closest] = true
 							collected += 1
+							roundCollected += 1   -- NEW
 							collectSound:Play()
-							counterLabel.Text = "Collected: " .. collected
+							counterLabel.Text = "Collected: " .. collected .. " (Round: " .. roundCollected .. "/" .. ROUND_CAP .. ")"
+
+							-- NEW: reset after 50 this round
+							if roundCollected >= ROUND_CAP then
+								local hum = character and character:FindFirstChildOfClass("Humanoid")
+								if hum and hum.Health > 0 then
+									local oldChar = character
+									hum.Health = 0
+									repeat task.wait(0.2) until player.Character ~= oldChar
+									task.wait(0.5)
+								end
+							end
 						end
 					end
 				end
