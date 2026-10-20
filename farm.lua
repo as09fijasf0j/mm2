@@ -1,461 +1,226 @@
+-- SERVICES
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
 
+-- VARIABLES
 local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
 
--- ===== CONFIG =====
-local COIN_NAME = "Coin_Server"
-local CONTAINER_NAME = "CoinContainer" 
-local LOBBY_NAME = "MainLobby"  -- si tocas algo dentro de esto, el script se detiene
-local TOGGLE_KEY = Enum.KeyCode.H
-local REST_TIME = 0.5
-local TRAVEL_DELAY = 0.25
-local TRAVEL_SPEED = 21    -- velocidad de vuelo hacia la moneda (studs/segundo)
-local HOVER_HEIGHT = 3     -- studs por encima de la moneda
-local DROP_TIME = 0.35     -- tiempo de espera para que caiga
-local SAFE_DISTANCE = 40   -- skip coins with another player closer than this (studs)
-local AVOID_PLAYERS = true
-local SKIP_SECONDS = 5     -- ignore a coin this long if it's still there after a visit
-local REQUIRE_VISIBLE = false -- true = solo monedas con Transparency < 1
+local visitedPositions = {}
+local isActive = false
+local flySpeed = 15
+local collected = 0
+local startTime = 0
+local antiAFK = false
 
--- ===== THEME =====
-local BG = Color3.fromRGB(24, 24, 30)
-local PANEL = Color3.fromRGB(38, 38, 48)
-local TEXT = Color3.fromRGB(235, 235, 240)
-local SUBTEXT = Color3.fromRGB(150, 150, 165)
-local GREEN = Color3.fromRGB(70, 190, 110)
-local RED = Color3.fromRGB(200, 70, 70)
+player.CharacterAdded:Connect(function(char)
+	character = char
+	rootPart = char:WaitForChild("HumanoidRootPart")
+	visitedPositions = {}
+end)
 
--- ===== GUI =====
-local gui = Instance.new("ScreenGui")
-gui.Name = "CoinTpGui"
+-- SOUND
+local collectSound = Instance.new("Sound", rootPart)
+collectSound.SoundId = "rbxassetid://12221967"
+collectSound.Volume = 1
+
+-- HALLOWEEN PALETTE
+local COLOR_BG = Color3.fromRGB(18, 14, 24)
+local COLOR_ACCENT = Color3.fromRGB(255, 120, 20)
+local COLOR_ACCENT_DIM = Color3.fromRGB(60, 40, 70)
+local COLOR_BTN = Color3.fromRGB(40, 28, 48)
+local COLOR_BTN_HOVER = Color3.fromRGB(60, 42, 70)
+local COLOR_ON = Color3.fromRGB(255, 140, 0)
+local COLOR_TEXT = Color3.fromRGB(255, 225, 180)
+local COLOR_TEXT_DIM = Color3.fromRGB(190, 160, 140)
+
+-- GUI
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+gui.Name = "MM2AutofarmGui"
 gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 0)
-frame.AutomaticSize = Enum.AutomaticSize.Y
-frame.Position = UDim2.new(0, 20, 0.35, 0)
-frame.BackgroundColor3 = BG
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 290, 0, 310)
+frame.Position = UDim2.new(0.5, -145, 0.3, 0)
+frame.BackgroundColor3 = COLOR_BG
 frame.BorderSizePixel = 0
 frame.Active = true
 frame.Draggable = true
-frame.Parent = gui
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
 local stroke = Instance.new("UIStroke", frame)
-stroke.Color = Color3.fromRGB(60, 60, 75)
-stroke.Thickness = 1
-Instance.new("UIListLayout", frame).SortOrder = Enum.SortOrder.LayoutOrder
+stroke.Color = COLOR_ACCENT
+stroke.Thickness = 2
 
--- header
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 36)
-header.BackgroundTransparency = 1
-header.LayoutOrder = 1
-header.Parent = frame
+local header = Instance.new("Frame", frame)
+header.Size = UDim2.new(1, 0, 0, 44)
+header.BackgroundColor3 = COLOR_ACCENT_DIM
+header.BorderSizePixel = 0
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 14)
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -50, 1, 0)
-title.Position = UDim2.new(0, 14, 0, 0)
+local title = Instance.new("TextLabel", header)
+title.Size = UDim2.new(1, -20, 1, 0)
+title.Position = UDim2.new(0, 10, 0, 0)
+title.Text = "🎃 MM2 Autofarm"
+title.TextColor3 = COLOR_TEXT
 title.BackgroundTransparency = 1
-title.Text = "Coin TP"
-title.TextColor3 = TEXT
-title.Font = Enum.Font.GothamBold
-title.TextSize = 15
+title.Font = Enum.Font.GothamBlack
+title.TextSize = 20
 title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = header
 
-local minBtn = Instance.new("TextButton")
-minBtn.Size = UDim2.new(0, 26, 0, 26)
-minBtn.Position = UDim2.new(1, -34, 0, 5)
-minBtn.BackgroundColor3 = PANEL
-minBtn.Text = "–"
-minBtn.TextColor3 = TEXT
-minBtn.Font = Enum.Font.GothamBold
-minBtn.TextSize = 16
-minBtn.Parent = header
-Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
+local credit = Instance.new("TextLabel", frame)
+credit.Size = UDim2.new(1, -20, 0, 18)
+credit.Position = UDim2.new(0, 10, 1, -20)
+credit.Text = "Made by LunaScripts"
+credit.TextColor3 = COLOR_TEXT_DIM
+credit.BackgroundTransparency = 1
+credit.Font = Enum.Font.Gotham
+credit.TextSize = 12
+credit.TextXAlignment = Enum.TextXAlignment.Right
 
--- body
-local body = Instance.new("Frame")
-body.Size = UDim2.new(1, 0, 0, 0)
-body.AutomaticSize = Enum.AutomaticSize.Y
-body.BackgroundTransparency = 1
-body.LayoutOrder = 2
-body.Parent = frame
+local hideBtn = Instance.new("TextButton", gui)
+hideBtn.Size = UDim2.new(0, 110, 0, 35)
+hideBtn.Position = UDim2.new(1, -120, 1, -45)
+hideBtn.Text = "👻 Hide GUI"
+hideBtn.BackgroundColor3 = COLOR_BTN
+hideBtn.TextColor3 = COLOR_TEXT
+hideBtn.Font = Enum.Font.GothamBold
+hideBtn.TextSize = 14
+Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 8)
 
-local pad = Instance.new("UIPadding", body)
-pad.PaddingLeft = UDim.new(0, 12)
-pad.PaddingRight = UDim.new(0, 12)
-pad.PaddingBottom = UDim.new(0, 12)
-
-local list = Instance.new("UIListLayout", body)
-list.Padding = UDim.new(0, 8)
-list.SortOrder = Enum.SortOrder.LayoutOrder
-
-minBtn.MouseButton1Click:Connect(function()
-	body.Visible = not body.Visible
-	minBtn.Text = body.Visible and "–" or "+"
+hideBtn.MouseEnter:Connect(function() hideBtn.BackgroundColor3 = COLOR_BTN_HOVER end)
+hideBtn.MouseLeave:Connect(function() hideBtn.BackgroundColor3 = COLOR_BTN end)
+hideBtn.MouseButton1Click:Connect(function()
+	frame.Visible = not frame.Visible
+	hideBtn.Text = frame.Visible and "👻 Hide GUI" or "👻 Show GUI"
 end)
 
-local order = 0
-local function nextOrder()
-	order += 1
-	return order
-end
-
-local function makeButton(text, color)
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(1, 0, 0, 34)
-	b.BackgroundColor3 = color
-	b.Text = text
-	b.TextColor3 = Color3.new(1, 1, 1)
-	b.Font = Enum.Font.GothamSemibold
-	b.TextSize = 13
-	b.AutoButtonColor = true
-	b.LayoutOrder = nextOrder()
-	b.Parent = body
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-	return b
-end
-
-local function makeRow(label, default)
-	local row = Instance.new("Frame")
-	row.Size = UDim2.new(1, 0, 0, 28)
-	row.BackgroundTransparency = 1
-	row.LayoutOrder = nextOrder()
-	row.Parent = body
-
-	local lbl = Instance.new("TextLabel")
-	lbl.Size = UDim2.new(1, -70, 1, 0)
-	lbl.BackgroundTransparency = 1
-	lbl.Text = label
-	lbl.TextColor3 = SUBTEXT
-	lbl.Font = Enum.Font.Gotham
-	lbl.TextSize = 12
-	lbl.TextXAlignment = Enum.TextXAlignment.Left
-	lbl.Parent = row
-
-	local box = Instance.new("TextBox")
-	box.Size = UDim2.new(0, 62, 1, 0)
-	box.Position = UDim2.new(1, -62, 0, 0)
-	box.BackgroundColor3 = PANEL
-	box.Text = tostring(default)
-	box.TextColor3 = TEXT
-	box.Font = Enum.Font.GothamMedium
-	box.TextSize = 12
-	box.ClearTextOnFocus = false
-	box.Parent = row
-	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
-	return box
-end
-
-local mainBtn = makeButton("Coin TP: OFF  [H]", RED)
-local avoidBtn = makeButton("Avoid players: ON", PANEL)
-local safeBox = makeRow("Safe distance (studs)", SAFE_DISTANCE)
-local restBox = makeRow("Rest at coin (sec)", REST_TIME)
-local travelBox = makeRow("Delay before TP (sec)", TRAVEL_DELAY)
-local speedBox = makeRow("Fly speed (studs/s)", TRAVEL_SPEED)
-
-local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, 0, 0, 34)
-status.BackgroundColor3 = PANEL
-status.BackgroundTransparency = 0.4
-status.Text = "Idle"
-status.TextColor3 = SUBTEXT
-status.Font = Enum.Font.Gotham
-status.TextSize = 11
-status.TextWrapped = true
-status.LayoutOrder = nextOrder()
-status.Parent = body
-Instance.new("UICorner", status).CornerRadius = UDim.new(0, 6)
-
-local function bindNumber(box, get, set, minValue)
-	box.FocusLost:Connect(function()
-		local n = tonumber(box.Text)
-		if n then set(math.max(minValue, n)) end
-		box.Text = tostring(get())
+local function makeButton(y, text)
+	local btn = Instance.new("TextButton", frame)
+	btn.Size = UDim2.new(0, 250, 0, 32)
+	btn.Position = UDim2.new(0.5, -125, 0, y)
+	btn.Text = text
+	btn.BackgroundColor3 = COLOR_BTN
+	btn.TextColor3 = COLOR_TEXT
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 14
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+	btn.MouseEnter:Connect(function() btn.BackgroundColor3 = COLOR_BTN_HOVER end)
+	btn.MouseLeave:Connect(function()
+		if btn:GetAttribute("locked") then return end
+		btn.BackgroundColor3 = COLOR_BTN
 	end)
+	return btn
 end
-bindNumber(safeBox, function() return SAFE_DISTANCE end, function(v) SAFE_DISTANCE = v end, 0)
-bindNumber(restBox, function() return REST_TIME end, function(v) REST_TIME = v end, 0)
-bindNumber(travelBox, function() return TRAVEL_DELAY end, function(v) TRAVEL_DELAY = v end, 0)
-bindNumber(speedBox, function() return TRAVEL_SPEED end, function(v) TRAVEL_SPEED = v end, 1)
 
-local function refreshAvoid()
-	avoidBtn.Text = "Avoid players: " .. (AVOID_PLAYERS and "ON" or "OFF")
-	avoidBtn.BackgroundColor3 = AVOID_PLAYERS and Color3.fromRGB(55, 90, 70) or PANEL
+local function makeLabel(y, text)
+	local lbl = Instance.new("TextLabel", frame)
+	lbl.Size = UDim2.new(0, 250, 0, 20)
+	lbl.Position = UDim2.new(0.5, -125, 0, y)
+	lbl.Text = text
+	lbl.BackgroundTransparency = 1
+	lbl.TextColor3 = COLOR_TEXT_DIM
+	lbl.Font = Enum.Font.Gotham
+	lbl.TextSize = 14
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	return lbl
 end
-avoidBtn.MouseButton1Click:Connect(function()
-	AVOID_PLAYERS = not AVOID_PLAYERS
-	refreshAvoid()
+
+local toggleBtn = makeButton(58, "🎃 Auto Farm: OFF")
+local afkBtn = makeButton(96, "🕯 Anti-AFK: OFF")
+local speedBtn = makeButton(134, "🦇 Tween Speed: 15")
+local counterLabel = makeLabel(172, "Collected: 0")
+local timerLabel = makeLabel(195, "Time Active: 0s")
+local rateLabel = makeLabel(218, "Est. Coins/Hour: 0")
+local resetBtn = makeButton(245, "🔄 Reset Counter")
+
+resetBtn.MouseButton1Click:Connect(function()
+	collected = 0
+	startTime = tick()
+	counterLabel.Text = "Collected: 0"
+	timerLabel.Text = "Time Active: 0s"
+	rateLabel.Text = "Est. Coins/Hour: 0"
 end)
-refreshAvoid()
 
--- ===== Helpers =====
-local enabled = false
-local visited = 0
-local skippedNearby = 0
-local skipUntil = setmetatable({}, { __mode = "k" })
-local containerCache
-local deadThisRound = false 
+afkBtn.MouseButton1Click:Connect(function()
+	antiAFK = not antiAFK
+	afkBtn.Text = antiAFK and "🕯 Anti-AFK: ON" or "🕯 Anti-AFK: OFF"
+	afkBtn.BackgroundColor3 = antiAFK and COLOR_ON or COLOR_BTN
+	afkBtn:SetAttribute("locked", antiAFK)
+end)
 
-local function findContainer()
-	if containerCache and containerCache.Parent then
-		return containerCache
+player.Idled:Connect(function()
+	if antiAFK then
+		VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+		task.wait(1)
+		VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
 	end
-	local wp = workspace:FindFirstChild("Workplace")
-	containerCache = (wp and wp:FindFirstChild(CONTAINER_NAME, true))
-		or workspace:FindFirstChild(CONTAINER_NAME, true)
-	return containerCache
+end)
+
+speedBtn.MouseButton1Click:Connect(function()
+	flySpeed += 1
+	if flySpeed > 25 then flySpeed = 10 end
+	speedBtn.Text = "🦇 Tween Speed: " .. flySpeed
+end)
+
+local function flyTo(pos, speed)
+	if not rootPart then return end
+	local duration = (pos - rootPart.Position).Magnitude / speed
+	local tween = TweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(pos)})
+	tween:Play()
+	tween.Completed:Wait()
 end
 
-local function getCoinPart(coin)
-	if coin:IsA("BasePart") then
-		return coin
-	elseif coin:IsA("Model") then
-		return coin.PrimaryPart or coin:FindFirstChildWhichIsA("BasePart", true)
-	end
-end
+toggleBtn.MouseButton1Click:Connect(function()
+	isActive = not isActive
+	toggleBtn.Text = isActive and "🎃 Auto Farm: ON" or "🎃 Auto Farm: OFF"
+	toggleBtn.BackgroundColor3 = isActive and COLOR_ON or COLOR_BTN
+	toggleBtn:SetAttribute("locked", isActive)
 
-local function isCoinVisible(part)
-	if not part or not part:IsDescendantOf(workspace) then return false end
-	if REQUIRE_VISIBLE and part.Transparency >= 1 then return false end
-	return true
-end
+	if isActive then
+		collected = 0
+		startTime = tick()
+		visitedPositions = {}
 
-local function getRoot()
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if not hum or hum.Health <= 0 then return nil end
-	return char:FindFirstChild("HumanoidRootPart")
-end
-
-local function hookCharacter(char)
-	local hum = char:WaitForChild("Humanoid", 10)
-	if hum then
-		hum.Died:Connect(function()
-			deadThisRound = true
-		end)
-	end
-end
-player.CharacterAdded:Connect(hookCharacter)
-if player.Character then
-	task.spawn(hookCharacter, player.Character)
-end
-
-local lobbyCache
-local lobbyParams = OverlapParams.new()
-lobbyParams.FilterType = Enum.RaycastFilterType.Include
-
-local function findLobby()
-	if lobbyCache and lobbyCache.Parent then
-		return lobbyCache
-	end
-	lobbyCache = workspace:FindFirstChild(LOBBY_NAME, true)
-	return lobbyCache
-end
-
-local function touchingLobby(root)
-	local lobby = findLobby()
-	if not lobby or not root then return false end
-	lobbyParams.FilterDescendantsInstances = { lobby }
-	local size = Vector3.new(6, 10, 6)
-	local parts = workspace:GetPartBoundsInBox(root.CFrame * CFrame.new(0, -2, 0), size, lobbyParams)
-	return #parts > 0
-end
-
-local function playerNear(position)
-	if not AVOID_PLAYERS then return false end
-	for _, other in Players:GetPlayers() do
-		if other ~= player then
-			local char = other.Character
-			local hrp = char and char:FindFirstChild("HumanoidRootPart")
-			if hrp and (hrp.Position - position).Magnitude < SAFE_DISTANCE then
-				return true
+		task.spawn(function()
+			while isActive do
+				local elapsed = tick() - startTime
+				timerLabel.Text = "Time Active: " .. math.floor(elapsed) .. "s"
+				rateLabel.Text = "Est. Coins/Hour: " .. (elapsed > 0 and math.floor((collected / elapsed) * 3600) or 0)
+				task.wait(0.1)
 			end
-		end
-	end
-	return false
-end
+		end)
 
-local function collectCoins(container)
-	local result, skipped, visibleCount = {}, 0, 0
-	local now = os.clock()
-	for _, obj in container:GetDescendants() do
-		-- Solo busca exactamente "Coin_Server"
-		if obj.Name == COIN_NAME then
-			local part = getCoinPart(obj)
-			if isCoinVisible(part) then
-				visibleCount += 1
-				if not skipUntil[obj] or skipUntil[obj] < now then
-					if playerNear(part.Position) then
-						skipped += 1
-					else
-						table.insert(result, { coin = obj, part = part })
+		task.spawn(function()
+			while isActive do
+				character = player.Character or player.CharacterAdded:Wait()
+				rootPart = character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					local closest, shortest = nil, math.huge
+					for _, obj in ipairs(workspace:GetDescendants()) do
+						if obj:IsA("BasePart") and obj.Name == "Coin_Server" and not visitedPositions[obj] then
+							local dist = (obj.Position - rootPart.Position).Magnitude
+							if dist < shortest and dist < 250 then
+								closest = obj
+								shortest = dist
+							end
+						end
+					end
+
+					if closest and closest.Parent and closest:IsDescendantOf(workspace) then
+						flyTo(closest.Position, flySpeed)
+						if closest.Parent then
+							visitedPositions[closest] = true
+							collected += 1
+							collectSound:Play()
+							counterLabel.Text = "Collected: " .. collected
+						end
 					end
 				end
+				task.wait(0.1)
 			end
-		end
-	end
-	return result, skipped, visibleCount
-end
-
-local function touch(root, part)
-	if firetouchinterest then
-		pcall(function()
-			firetouchinterest(root, part, 0)
-			firetouchinterest(root, part, 1)
 		end)
-	end
-end
-
-local function glideAbove(root, part)
-	local targetPos = part.CFrame + Vector3.new(0, HOVER_HEIGHT, 0)
-	local distance = (targetPos.Position - root.Position).Magnitude
-	local duration = math.max(distance / TRAVEL_SPEED, 0.05)
-
-	root.AssemblyLinearVelocity = Vector3.zero
-	root.Anchored = true
-
-	local tween = TweenService:Create(
-		root,
-		TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
-		{ CFrame = targetPos }
-	)
-	tween:Play()
-
-	task.spawn(function()
-		while tween.PlaybackState == Enum.PlaybackState.Playing do
-			if not enabled or deadThisRound or not isCoinVisible(part) or touchingLobby(root) then
-				tween:Cancel()
-				break
-			end
-			task.wait(0.05)
-		end
-	end)
-
-	tween.Completed:Wait()
-	root.Anchored = false
-end
-
--- ===== Main loop =====
-local function loop()
-	while enabled do
-		local container = findContainer()
-		if not container then
-			status.Text = "Waiting for round (no Container)"
-			task.wait(1)
-			continue
-		end
-
-		local root = getRoot()
-		if not root then
-			status.Text = "Waiting for character..."
-			task.wait(0.5)
-			continue
-		end
-
-		if touchingLobby(root) then
-			status.Text = ("Waiting for round to start | Visited: %d"):format(visited)
-			task.wait(0.3)
-			continue
-		end
-
-		local coins, skipped, visibleCount = collectCoins(container)
-
-		if visibleCount == 0 then
-			deadThisRound = false 
-			status.Text = ("Waiting for round to start | Visited: %d"):format(visited)
-			task.wait(0.5)
-			continue
-		end
-
-		if deadThisRound then
-			status.Text = ("Dead / in lobby - waiting for next round | Visited: %d"):format(visited)
-			task.wait(0.5)
-			continue
-		end
-
-		if #coins == 0 then
-			status.Text = ("No safe coins | Skipped (players nearby): %d | Visited: %d"):format(skipped, visited)
-			task.wait(0.5)
-			continue
-		end
-
-		local pos = root.Position
-		local best, bestDist
-		for _, entry in coins do
-			local d = (entry.part.Position - pos).Magnitude
-			if not bestDist or d < bestDist then
-				best, bestDist = entry, d
-			end
-		end
-		local entry = best
-
-		task.wait(TRAVEL_DELAY)
-
-		root = getRoot()
-		if not enabled or deadThisRound or not root then continue end
-		if not entry.coin.Parent or not isCoinVisible(entry.part) then
-			status.Text = ("Coin already taken, picking another | Visited: %d"):format(visited)
-			continue 
-		end
-		if touchingLobby(root) then continue end
-
-		if playerNear(entry.part.Position) then
-			skippedNearby += 1
-			skipUntil[entry.coin] = os.clock() + SKIP_SECONDS
-			status.Text = ("Skipped a coin, player nearby | Visited: %d"):format(visited)
-			continue
-		end
-
-		status.Text = ("Going to nearest coin (%d studs) | Visited: %d"):format(math.floor(bestDist), visited)
-		glideAbove(root, entry.part) 
-
-		if not enabled or deadThisRound or touchingLobby(root) then continue end
-		if not entry.coin.Parent or not isCoinVisible(entry.part) then
-			status.Text = ("Coin taken while flying | Visited: %d"):format(visited)
-			continue
-		end
-
-		task.wait(DROP_TIME)
-		if isCoinVisible(entry.part) then
-			touch(root, entry.part) 
-		end
-		visited += 1
-		status.Text = ("Visited: %d | Skipped: %d | Coins left: %d"):format(visited, skippedNearby, #coins - 1)
-
-		task.wait(REST_TIME)
-
-		if entry.coin.Parent then
-			skipUntil[entry.coin] = os.clock() + SKIP_SECONDS
-		end
-
-		task.wait()
-	end
-	status.Text = ("Idle | Visited: %d | Skipped: %d"):format(visited, skippedNearby)
-end
-
-local function setEnabled(state)
-	enabled = state
-	mainBtn.Text = "Coin TP: " .. (enabled and "ON" or "OFF") .. "  [H]"
-	mainBtn.BackgroundColor3 = enabled and GREEN or RED
-	if enabled then
-		task.spawn(loop)
-	else
-		local root = getRoot()
-		if root then root.Anchored = false end
-	end
-end
-
-mainBtn.MouseButton1Click:Connect(function()
-	setEnabled(not enabled)
-end)
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if not processed and input.KeyCode == TOGGLE_KEY then
-		setEnabled(not enabled)
 	end
 end)
