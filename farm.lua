@@ -16,7 +16,8 @@ local collected = 0
 local roundCollected = 0   -- NEW: resets every round
 local startTime = 0
 local antiAFK = false
-local ROUND_CAP = 50       -- NEW: change if the cap isn't 50
+local ROUND_CAP = 50       -- change if the cap isn't 50
+local RESET_DELAY = 3      -- NEW: seconds to wait after hitting 50 before resetting
 
 player.CharacterAdded:Connect(function(char)
 	character = char
@@ -141,7 +142,7 @@ local resetBtn = makeButton(245, "🔄 Reset Counter")
 
 resetBtn.MouseButton1Click:Connect(function()
 	collected = 0
-	roundCollected = 0   -- NEW: also reset round counter
+	roundCollected = 0
 	startTime = tick()
 	counterLabel.Text = "Collected: 0 (Round: 0/" .. ROUND_CAP .. ")"
 	timerLabel.Text = "Time Active: 0s"
@@ -185,7 +186,7 @@ toggleBtn.MouseButton1Click:Connect(function()
 
 	if isActive then
 		collected = 0
-		roundCollected = 0   -- NEW: fresh round count on start
+		roundCollected = 0
 		startTime = tick()
 		visitedPositions = {}
 
@@ -219,18 +220,27 @@ toggleBtn.MouseButton1Click:Connect(function()
 						if closest.Parent then
 							visitedPositions[closest] = true
 							collected += 1
-							roundCollected += 1   -- NEW
+							roundCollected += 1
 							collectSound:Play()
 							counterLabel.Text = "Collected: " .. collected .. " (Round: " .. roundCollected .. "/" .. ROUND_CAP .. ")"
 
-							-- NEW: reset after 50 this round
+							-- NEW: 3-second delay before reset after reaching the cap
 							if roundCollected >= ROUND_CAP then
-								local hum = character and character:FindFirstChildOfClass("Humanoid")
-								if hum and hum.Health > 0 then
-									local oldChar = character
-									hum.Health = 0
-									repeat task.wait(0.2) until player.Character ~= oldChar
-									task.wait(0.5)
+								counterLabel.Text = "🎃 50 reached! Resetting in " .. RESET_DELAY .. "s..."
+								-- count down so you can see it
+								for i = RESET_DELAY, 1, -1 do
+									counterLabel.Text = "🎃 50 reached! Resetting in " .. i .. "s..."
+									task.wait(1)
+									if not isActive then break end
+								end
+								if isActive then
+									local hum = character and character:FindFirstChildOfClass("Humanoid")
+									if hum and hum.Health > 0 then
+										local oldChar = character
+										hum.Health = 0
+										repeat task.wait(0.2) until player.Character ~= oldChar
+										task.wait(0.5)
+									end
 								end
 							end
 						end
